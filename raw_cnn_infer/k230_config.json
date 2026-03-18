@@ -1,0 +1,39 @@
+{
+  "name": "raw_cnn_k230",
+  "paths": {
+    "weights_pth": "model/model_run020.pth",
+    "onnx": "model/model_run020.onnx",
+    "kmodel": "model/model_run020.kmodel",
+    "scaler_pkl": "model/scaler_run020.pkl",
+    "scaler_json": "model/scaler_run020.json",
+    "calibration_npy": "model/calibration_input.npy",
+    "test_data_dir": "test_data",
+    "predictions_csv": "predictions_k230.csv",
+    "nncase_dump_dir": "model/nncase_dump"
+  },
+  "data": {
+    "base_window_size": 500,
+    "base_step": 250,
+    "sequence_length": 1,
+    "sequence_step": 1
+  },
+  "preprocessing": {
+    "feature_mode": "raw",
+    "filter_type": "none"
+  },
+  "model": {
+    "type": "CNN-All",
+    "conv_filters": [
+      32,
+      64
+    ],
+    "kernel_size": 5,
+    "pool_size": 1
+  },
+  "quantization": {
+    "samples_count": 64,
+    "quant_type": "uint8",
+    "weight_quant_type": "uint8",
+    "calibrate_method": "NoClip"
+  }
+}

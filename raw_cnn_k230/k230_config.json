@@ -1,0 +1,32 @@
+{
+  "name": "raw_cnn_k230_runtime",
+  "paths": {
+    "kmodel": "model/model_run020.kmodel",
+    "scaler_json": "model/scaler_run020.json",
+    "test_data_dir": "test_data",
+    "predictions_csv": "predictions_k230.csv"
+  },
+  "data": {
+    "base_window_size": 500,
+    "base_step": 250,
+    "sequence_length": 1,
+    "sequence_step": 1
+  },
+  "runtime": {
+    "max_samples": 10
+  },
+  "uart": {
+    "enabled": true,
+    "uart_id": 2,
+    "tx_pin": 11,
+    "rx_pin": 12,
+    "baudrate": 115200,
+    "bits": 8,
+    "parity": "none",
+    "stop": 1,
+    "predict_scale": 1000000000,
+    "value_count": 12,
+    "header": 170,
+    "tail": 255
+  }
+}

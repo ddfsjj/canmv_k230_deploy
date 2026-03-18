@@ -1,0 +1,36 @@
+{
+  "name": "fft_bp_infer",
+  "data": {
+    "test_data_dir": "test_data",
+    "base_window_size": 500,
+    "base_step": 250,
+    "sequence_length": 1,
+    "sequence_step": 1
+  },
+  "preprocessing": {
+    "feature_mode": "FFT Spectrum",
+    "fft_config": {
+      "fs": 1000,
+      "f_min": 0.1,
+      "f_max": 50,
+      "window": "hann",
+      "nfft": "auto"
+    }
+  },
+  "model": {
+    "type": "BP",
+    "hidden_units": [
+      32
+    ],
+    "activation": "tanh",
+    "output_activation": "none",
+    "weights_path": "model/model_run000.pth"
+  },
+  "normalization": {
+    "type": "StandardScaler",
+    "scaler_path": "model/scaler_run000.pkl"
+  },
+  "runtime": {
+    "device": "cpu"
+  }
+}
