@@ -1,5 +1,5 @@
 {
-  "name": "raw_cnn_infer",
+  "name": "raw_cnn_pc",
   "data": {
     "test_data_dir": "test_data",
     "base_window_size": 500,
