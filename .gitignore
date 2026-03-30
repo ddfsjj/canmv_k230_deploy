@@ -1,1 +1,12 @@
 .venv/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 推理输出与临时文件
+predictions*.csv
+I
+
+# 编译转储目录
+gmodel_dump_dir/
