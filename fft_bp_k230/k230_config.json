@@ -1,0 +1,25 @@
+{
+  "name": "fft_bp_k230_runtime",
+  "paths": {
+    "kmodel": "model/model_run000.kmodel",
+    "scaler_json": "model/scaler_run000.json",
+    "test_data_dir": "test_data",
+    "predictions_csv": "predictions_k230.csv"
+  },
+  "data": {
+    "base_window_size": 500,
+    "base_step": 250,
+    "sequence_length": 1,
+    "sequence_step": 1
+  },
+  "preprocessing": {
+    "feature_mode": "FFT Spectrum",
+    "fft_config": {
+      "fs": 1000,
+      "f_min": 0.1,
+      "f_max": 50,
+      "window": "hann",
+      "nfft": "auto"
+    }
+  }
+}

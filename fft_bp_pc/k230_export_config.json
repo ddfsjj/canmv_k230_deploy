@@ -1,15 +1,15 @@
 {
-  "name": "fft_bp_k230",
+  "name": "fft_bp_k230_export",
   "paths": {
     "weights_pth": "model/model_run000.pth",
-    "onnx": "model/model_run000.onnx",
-    "kmodel": "model/model_run000.kmodel",
+    "onnx": "../fft_bp_k230/model/model_run000.onnx",
+    "kmodel": "../fft_bp_k230/model/model_run000.kmodel",
     "scaler_pkl": "model/scaler_run000.pkl",
-    "scaler_json": "model/scaler_run000.json",
-    "calibration_npy": "model/calibration_input.npy",
+    "scaler_json": "../fft_bp_k230/model/scaler_run000.json",
+    "calibration_npy": "../fft_bp_k230/model/calibration_input.npy",
     "test_data_dir": "test_data",
-    "predictions_csv": "predictions_k230.csv",
-    "nncase_dump_dir": "model/nncase_dump"
+    "predictions_csv": "../fft_bp_k230/predictions_k230.csv",
+    "nncase_dump_dir": "../fft_bp_k230/model/nncase_dump"
   },
   "data": {
     "base_window_size": 500,

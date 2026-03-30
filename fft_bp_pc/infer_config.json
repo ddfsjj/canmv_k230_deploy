@@ -1,5 +1,5 @@
 {
-  "name": "fft_bp_infer",
+  "name": "fft_bp_pc",
   "data": {
     "test_data_dir": "test_data",
     "base_window_size": 500,

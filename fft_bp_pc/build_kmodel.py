@@ -12,7 +12,7 @@ import torch.nn as nn
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Build K230 deploy assets for FFT+BP.")
-    parser.add_argument("--config", type=str, default="k230_config.json")
+    parser.add_argument("--config", type=str, default="k230_export_config.json")
     parser.add_argument(
         "--skip_compile",
         action="store_true",
