@@ -58,6 +58,21 @@ def resolve_positive_step(value, fallback: int, field_name: str) -> int:
     return require_positive_int(value, field_name)
 
 
+def resolve_max_samples(cli_value, config_value):
+    # 优先使用命令行；未传时再读取配置。配置为 null 表示全量。
+    if cli_value is not None:
+        value = int(cli_value)
+        if value <= 0:
+            raise ValueError(f"max_samples must be > 0, got {value}")
+        return value
+    if config_value is None:
+        return None
+    value = int(config_value)
+    if value <= 0:
+        raise ValueError(f"runtime.max_samples must be > 0, got {value}")
+    return value
+
+
 def load_state_dict_compat(path: Path, device: torch.device):
     try:
         return torch.load(path, map_location=device, weights_only=True)
@@ -131,6 +146,7 @@ def build_dataset(
     base_step: int,
     seq_length: int,
     seq_step: int,
+    feature_mode: str = "raw",
 ):
     X_list = []
     y_list = []
@@ -143,7 +159,8 @@ def build_dataset(
         features = []
         for start in range(0, signal.size - base_window_size + 1, base_step):
             window = signal[start : start + base_window_size]
-            features.append(window.astype(np.float32))
+            window = apply_feature_mode(window.astype(np.float32), feature_mode)
+            features.append(window)
 
         if len(features) < seq_length:
             continue
@@ -159,6 +176,20 @@ def build_dataset(
     X = np.stack(X_list).astype(np.float32)
     y = np.asarray(y_list, dtype=np.float32)
     return X, y
+
+
+def normalize_feature_mode(feature_mode: str) -> str:
+    text = str(feature_mode).strip().lower().replace("-", "_").replace(" ", "_")
+    if text in {"window_demean", "demean", "window_mean_center"}:
+        return "window_demean"
+    return "raw"
+
+
+def apply_feature_mode(window: np.ndarray, feature_mode: str) -> np.ndarray:
+    mode = normalize_feature_mode(feature_mode)
+    if mode == "window_demean":
+        return (window - np.mean(window, dtype=np.float32)).astype(np.float32)
+    return window.astype(np.float32)
 
 
 def save_predictions(output_csv: Path, y_true: np.ndarray, y_pred: np.ndarray):
@@ -198,8 +229,8 @@ def main():
     base_step = resolve_positive_step(base_step_cfg, base_window_size // 2, "data.base_step")
     seq_length = require_positive_int(cfg["data"]["sequence_length"], "data.sequence_length")
     seq_step = require_positive_int(cfg["data"]["sequence_step"], "data.sequence_step")
-    if args.max_samples is not None and args.max_samples <= 0:
-        raise ValueError(f"max_samples must be > 0, got {args.max_samples}")
+    feature_mode = normalize_feature_mode(cfg.get("preprocessing", {}).get("feature_mode", "raw"))
+    max_samples = resolve_max_samples(args.max_samples, cfg.get("runtime", {}).get("max_samples", None))
 
     t_total_start = time.perf_counter()
     X, y = build_dataset(
@@ -208,11 +239,12 @@ def main():
         base_step=base_step,
         seq_length=seq_length,
         seq_step=seq_step,
+        feature_mode=feature_mode,
     )
     if X.shape[0] == 0:
         raise RuntimeError(f"No valid samples found under: {data_dir}")
-    if args.max_samples is not None:
-        limit = min(int(args.max_samples), int(X.shape[0]))
+    if max_samples is not None:
+        limit = min(int(max_samples), int(X.shape[0]))
         X = X[:limit]
         y = y[:limit]
 
@@ -253,6 +285,7 @@ def main():
     print(f"data_dir: {data_dir}")
     print(f"model_path: {model_path}")
     print(f"scaler_path: {scaler_path}")
+    print(f"feature_mode: {feature_mode}")
     print(f"samples: {X.shape[0]}")
     print(f"input_shape: {tuple(X.shape[1:])}")
     print(f"inference_time_sec: {t_infer_end - t_infer_start:.6f}")

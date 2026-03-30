@@ -1,8 +1,8 @@
 {
   "name": "raw_cnn_k230_runtime",
   "paths": {
-    "kmodel": "model/model_run020.kmodel",
-    "scaler_json": "model/scaler_run020.json",
+    "kmodel": "model/cnn_all_20260317_030406.kmodel",
+    "scaler_json": "model/scaler_20260317_030406.json",
     "test_data_dir": "test_data",
     "predictions_csv": "predictions_k230.csv"
   },
@@ -12,21 +12,74 @@
     "sequence_length": 1,
     "sequence_step": 1
   },
+  "preprocessing": {
+    "feature_mode": "window_demean",
+    "filter_type": "none"
+  },
   "runtime": {
-    "max_samples": 10
+    "mode": "uart_online",
+    "max_samples": 12,
+    "compare_max_samples": 10,
+    "infer_batch_size": 12,
+    "write_predictions_csv": false,
+    "uart_frame_return": {
+      "return_every_n_frames": 20,
+      "idle_sleep_ms": 1,
+      "log_every_n_frames": 100,
+      "print_hex": false,
+      "strict_protocol": true,
+      "fixed_frame_len": 524,
+      "return_inner_frame_when_outer_enabled": true,
+      "return_inner_frame_index": -1
+    },
+    "uart_echo": {
+      "idle_sleep_ms": 1,
+      "log_every_n_packets": 20,
+      "print_hex": false
+    },
+    "uart_debug_ack": {
+      "idle_sleep_ms": 1,
+      "log_every_n_frames": 20,
+      "print_hex": false,
+      "strict_protocol": true,
+      "fixed_frame_len": 524,
+      "flush_rx_on_start": true,
+      "startup_flush_empty_rounds": 3,
+      "startup_flush_sleep_ms": 10,
+      "ack_magic": 9001
+    },
+    "online_uart": {
+      "channel_count": 12,
+      "infer_step_frames": 200,
+      "input_value_type": "int32",
+      "input_byte_order": "big",
+      "idle_sleep_ms": 1,
+      "log_every_n_frames": 50,
+      "send_zeros_before_ready": false,
+      "debug_predict_trace": false,
+      "flush_rx_on_start": true,
+      "startup_flush_empty_rounds": 3,
+      "startup_flush_sleep_ms": 10
+    }
   },
   "uart": {
     "enabled": true,
     "uart_id": 2,
     "tx_pin": 11,
     "rx_pin": 12,
-    "baudrate": 115200,
+    "baudrate": 921600,
     "bits": 8,
     "parity": "none",
     "stop": 1,
-    "predict_scale": 1000000000,
+    "predict_scale": 10000,
+    "value_type": "int32",
+    "byte_order": "big",
     "value_count": 12,
-    "header": 170,
-    "tail": 255
+    "header": [85, 170],
+    "tail": [252, 207],
+    "outer_frame_enabled": true,
+    "outer_frame_count": 10,
+    "outer_header": [247, 127],
+    "outer_tail": [250, 175]
   }
 }

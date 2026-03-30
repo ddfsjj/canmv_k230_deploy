@@ -12,6 +12,14 @@ import torch.nn as nn
 def parse_args():
     parser = argparse.ArgumentParser(description="Build K230 deploy assets for Raw+CNN.")
     parser.add_argument("--config", type=str, default="k230_export_config.json")
+    # 大将军平时直接改配置文件即可；这里只保留一个临时覆盖入口，
+    # 方便偶尔快速验证另一批校准数据，不影响默认配置用法。
+    parser.add_argument(
+        "--calibration_data_dir",
+        type=str,
+        default=None,
+        help="Optional override for calibration data directory. If omitted, use paths.calibration_data_dir or paths.test_data_dir in config.",
+    )
     parser.add_argument(
         "--skip_compile",
         action="store_true",
@@ -82,7 +90,14 @@ def build_dataset(
     base_step: int,
     seq_length: int,
     seq_step: int,
+    feature_mode: str = "raw",
 ):
+    # 这里把“目录里的原始长 CSV”转换成“模型真正吃的样本张量”。
+    # 顺序是：
+    # 1. 按文件名字典序遍历所有 CSV
+    # 2. 逐个 CSV 按 base_window_size / base_step 切基础窗口
+    # 3. 再按 sequence_length / sequence_step 组装成模型输入样本
+    # 4. 最后把所有文件的样本顺序拼接成一个大数组
     X_list = []
     y_list = []
     for csv_file in sorted(data_dir.glob("*.csv")):
@@ -92,7 +107,8 @@ def build_dataset(
         features = []
         for start in range(0, signal.size - base_window_size + 1, base_step):
             window = signal[start : start + base_window_size]
-            features.append(window.astype(np.float32))
+            window = apply_feature_mode(window.astype(np.float32), feature_mode)
+            features.append(window)
         if len(features) < seq_length:
             continue
         label = parse_label_from_name(csv_file.name)
@@ -104,6 +120,20 @@ def build_dataset(
     X = np.stack(X_list).astype(np.float32)
     y = np.asarray(y_list, dtype=np.float32)
     return X, y
+
+
+def normalize_feature_mode(feature_mode: str) -> str:
+    text = str(feature_mode).strip().lower().replace("-", "_").replace(" ", "_")
+    if text in {"window_demean", "demean", "window_mean_center"}:
+        return "window_demean"
+    return "raw"
+
+
+def apply_feature_mode(window: np.ndarray, feature_mode: str) -> np.ndarray:
+    mode = normalize_feature_mode(feature_mode)
+    if mode == "window_demean":
+        return (window - np.mean(window, dtype=np.float32)).astype(np.float32)
+    return window.astype(np.float32)
 
 
 def ensure_per_layer(value, num_layers: int, field: str):
@@ -162,7 +192,7 @@ def load_state_dict_compat(path: Path, device: torch.device):
 
 def export_onnx(model: nn.Module, onnx_path: Path, input_shape):
     try:
-        import onnx  # type: ignore  # noqa: F401
+        import onnx  # type: ignore
     except ImportError as exc:
         raise RuntimeError(
             "ONNX export requires `onnx` package. Install requirements_k230_host.txt first."
@@ -181,6 +211,29 @@ def export_onnx(model: nn.Module, onnx_path: Path, input_shape):
         output_names=["output"],
         dynamic_axes=None,
     )
+    sanitize_onnx_for_nncase(onnx_path, onnx)
+
+
+def sanitize_onnx_for_nncase(onnx_path: Path, onnx_module):
+    # 某些 1D MaxPool 导出的 ONNX 会附带 dilations=[1] 属性，
+    # 但当前 nncase 在导入时会把它当成尺寸错误的窗口参数。
+    # 这里在导出后做一次轻量清洗，移除这项对结果无影响的属性。
+    model = onnx_module.load(onnx_path.as_posix())
+    changed = False
+    for node in model.graph.node:
+        if node.op_type != "MaxPool":
+            continue
+        keep_attrs = []
+        for attr in node.attribute:
+            if attr.name == "dilations":
+                changed = True
+                continue
+            keep_attrs.append(attr)
+        if len(keep_attrs) != len(node.attribute):
+            del node.attribute[:]
+            node.attribute.extend(keep_attrs)
+    if changed:
+        onnx_module.save(model, onnx_path.as_posix())
 
 
 def export_scaler_json(scaler_pkl: Path, scaler_json: Path):
@@ -199,6 +252,54 @@ def apply_scaler(scaler_pkl: Path, X: np.ndarray):
     X_flat = X.reshape(-1, X.shape[-1])
     X_scaled = scaler.transform(X_flat).reshape(X.shape).astype(np.float32)
     return X_scaled
+
+
+def normalize_sampling_strategy(strategy: str) -> str:
+    # 量化校准样本抽取策略统一在这里标准化，配置里写法可以更宽松。
+    # first   : 直接取前 N 条样本
+    # uniform : 从全体样本中均匀抽 N 条
+    # random  : 从全体样本中随机抽 N 条
+    text = str(strategy).strip().lower().replace("-", "_").replace(" ", "_")
+    if text in {"first", "head", "sequential"}:
+        return "first"
+    if text in {"uniform", "even", "linspace"}:
+        return "uniform"
+    if text in {"random", "shuffle", "rand"}:
+        return "random"
+    raise ValueError(
+        "quantization.sampling_strategy must be one of: first / uniform / random"
+    )
+
+
+def select_calibration_data(X_scaled: np.ndarray, count: int, strategy: str, random_seed):
+    # 量化校准真正喂给 nncase 的样本在这里确定。
+    # 大将军以后如果想调整“拿哪些样本去量化”，只需要改
+    # k230_export_config.json 里的：
+    # - quantization.samples_count
+    # - quantization.sampling_strategy
+    # - quantization.random_seed
+    total = int(X_scaled.shape[0])
+    if total <= 0:
+        raise RuntimeError("No scaled samples available for calibration.")
+    if count >= total:
+        return X_scaled.astype(np.float32)
+
+    mode = normalize_sampling_strategy(strategy)
+    if mode == "first":
+        # 保留旧逻辑：按当前样本顺序直接取前 N 条。
+        indices = np.arange(count, dtype=np.int64)
+    elif mode == "uniform":
+        # 从整体样本范围内均匀取点，适合尽量覆盖全局分布。
+        indices = np.linspace(0, total - 1, num=count, dtype=np.int64)
+    else:
+        # 随机抽样适合做对照实验；random_seed 固定时结果可复现。
+        if random_seed is None:
+            rng = np.random.default_rng()
+        else:
+            rng = np.random.default_rng(int(random_seed))
+        indices = np.sort(rng.choice(total, size=count, replace=False).astype(np.int64))
+
+    return X_scaled[indices].astype(np.float32)
 
 
 def compile_kmodel_with_nncase(cfg: dict, root: Path, calibration_data: np.ndarray):
@@ -227,11 +328,17 @@ def compile_kmodel_with_nncase(cfg: dict, root: Path, calibration_data: np.ndarr
     compile_options.dump_dir = dump_dir.as_posix()
 
     ptq_options = nncase.PTQTensorOptions()
+    # 下面这些字段就是量化的核心配置：
+    # samples_count      : 最终实际参与量化校准的样本条数
+    # quant_type         : 激活值量化类型
+    # weight_quant_type  : 权重量化类型
+    # calibrate_method   : 量化范围估计方法
     ptq_options.samples_count = int(calibration_data.shape[0])
     ptq_options.quant_type = qcfg.get("quant_type", "uint8")
     ptq_options.w_quant_type = qcfg.get("weight_quant_type", "uint8")
     ptq_options.calibrate_method = qcfg.get("calibrate_method", "NoClip")
 
+    # nncase 这里吃的是“样本列表”，每条样本 shape 都是 (1, C, L)。
     sample_list = [calibration_data[i : i + 1].astype(np.float32) for i in range(calibration_data.shape[0])]
     ptq_options.set_tensor_data([sample_list])
 
@@ -257,13 +364,21 @@ def main():
     data_cfg = cfg["data"]
     model_cfg = cfg["model"]
     qcfg = cfg["quantization"]
+    feature_mode = normalize_feature_mode(cfg.get("preprocessing", {}).get("feature_mode", "raw"))
 
     weights_pth = (root / paths["weights_pth"]).resolve()
     onnx_path = (root / paths["onnx"]).resolve()
     scaler_pkl = (root / paths["scaler_pkl"]).resolve()
     scaler_json = (root / paths["scaler_json"]).resolve()
     calib_npy = (root / paths["calibration_npy"]).resolve()
-    test_data_dir = (root / paths["test_data_dir"]).resolve()
+    if args.calibration_data_dir:
+        # 如果临时传了目录，就优先用临时目录。
+        calibration_data_dir = Path(args.calibration_data_dir).resolve()
+    else:
+        # 正常长期使用时，大将军只需要改配置里的 calibration_data_dir。
+        # 如果没写这个字段，才回退到旧字段 test_data_dir。
+        calib_data_dir_cfg = paths.get("calibration_data_dir", paths["test_data_dir"])
+        calibration_data_dir = (root / calib_data_dir_cfg).resolve()
 
     base_window = require_positive_int(data_cfg["base_window_size"], "data.base_window_size")
     base_step_cfg = data_cfg.get("base_step", None)
@@ -273,23 +388,35 @@ def main():
 
     try:
         X, y = build_dataset(
-            data_dir=test_data_dir,
+            data_dir=calibration_data_dir,
             base_window_size=base_window,
             base_step=base_step,
             seq_length=seq_length,
             seq_step=seq_step,
+            feature_mode=feature_mode,
         )
         if X.shape[0] == 0:
-            raise RuntimeError(f"No valid samples in test data: {test_data_dir}")
+            raise RuntimeError(f"No valid samples in calibration data: {calibration_data_dir}")
 
         X_scaled = apply_scaler(scaler_pkl, X)
         if args.max_calib_samples is not None:
             requested = require_positive_int(args.max_calib_samples, "max_calib_samples")
         else:
+            # 平时优先改配置里的 quantization.samples_count；
+            # 这里的 requested 只是“希望抽多少条”，真正能抽多少还要看总样本数。
             requested = require_positive_int(qcfg.get("samples_count", 64), "quantization.samples_count")
         count = min(requested, X_scaled.shape[0])
-        calibration_data = X_scaled[:count].astype(np.float32)
+        sampling_strategy = qcfg.get("sampling_strategy", "first")
+        random_seed = qcfg.get("random_seed", None)
+        # 这里是“从全部候选样本里抽出量化校准子集”的唯一入口。
+        calibration_data = select_calibration_data(
+            X_scaled=X_scaled,
+            count=count,
+            strategy=sampling_strategy,
+            random_seed=random_seed,
+        )
         calib_npy.parent.mkdir(parents=True, exist_ok=True)
+        # 额外保存一份 calibration_input.npy，方便后续排查到底用了哪批样本去量化。
         np.save(calib_npy, calibration_data)
 
         export_scaler_json(scaler_pkl, scaler_json)
@@ -308,7 +435,11 @@ def main():
 
         print("Exported ONNX:", onnx_path)
         print("Exported scaler json:", scaler_json)
+        print("Calibration data dir:", calibration_data_dir)
         print("Saved calibration data:", calib_npy, calibration_data.shape)
+        print("Calibration sampling strategy:", normalize_sampling_strategy(sampling_strategy))
+        print("Calibration random seed:", random_seed)
+        print("feature_mode:", feature_mode)
 
         if args.skip_compile:
             print("Skip nncase compile (--skip_compile set).")

@@ -8,24 +8,25 @@
     "sequence_step": 1
   },
   "preprocessing": {
-    "feature_mode": "raw",
+    "feature_mode": "window_demean",
     "filter_type": "none"
   },
   "model": {
     "type": "CNN-All",
     "conv_filters": [
-      32,
-      64
+      16,
+      32
     ],
-    "kernel_size": 5,
-    "pool_size": 1,
-    "weights_path": "model/model_run020.pth"
+    "kernel_size": 3,
+    "pool_size": 2,
+    "weights_path": "model/cnn_all_20260317_030406.pth"
   },
   "normalization": {
     "type": "StandardScaler",
-    "scaler_path": "model/scaler_run020.pkl"
+    "scaler_path": "model/scaler_20260317_030406.pkl"
   },
   "runtime": {
-    "device": "cpu"
+    "device": "cpu",
+    "max_samples": null
   }
 }

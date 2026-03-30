@@ -1,0 +1,60 @@
+{
+  "artifact_version": 1,
+  "created_at": "2026-03-17 03:02:22",
+  "model_type": "CNN-All",
+  "model_kwargs": {
+    "hidden_units": [
+      64,
+      32
+    ],
+    "mlp_activation": [
+      "relu",
+      "tanh"
+    ],
+    "bp_hidden_units": [
+      32
+    ],
+    "bp_activation": [
+      "sigmoid"
+    ],
+    "bp_output_activation": "none",
+    "cnn_lstm_conv_filters": 32,
+    "cnn_lstm_units": 50,
+    "lstm_hidden_size": 64,
+    "lstm_num_layers": 1,
+    "lstm_dropout": 0.0,
+    "lstm_bidirectional": false,
+    "svr_kernel": "rbf",
+    "svr_C": 1.0,
+    "svr_gamma": "scale",
+    "svr_epsilon": 0.1,
+    "cnn_conv_filters": [
+      16,
+      32
+    ],
+    "cnn_kernel_size": 3,
+    "cnn_pool_size": 2,
+    "cnn2d_conv_filters": [
+      16,
+      16
+    ],
+    "cnn2d_kernel_size": [
+      3,
+      3
+    ],
+    "cnn2d_pool_size": 2,
+    "cnn2d_use_gap": true
+  },
+  "feat_mode": "Window Demean",
+  "seq_length": 1,
+  "seq_step": 1,
+  "norm_method": "StandardScaler",
+  "filter_type": "none",
+  "aux_enabled": false,
+  "aux_dim": 0,
+  "aux_names": [
+    "温度"
+  ],
+  "data_folder": "data/generated_dry_temp_csv/",
+  "scaler_path": "outputs/models/scaler_20260317_030406.pkl"
+}

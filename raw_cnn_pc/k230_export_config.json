@@ -1,12 +1,62 @@
 {
   "name": "raw_cnn_k230_export",
+  "_help": {
+    "how_to_use": [
+      "大将军平时直接改这个配置文件即可，不需要改 build_kmodel.py 代码。",
+      "如果以后换量化校准数据，通常只需要改 paths.calibration_data_dir。",
+      "如果以后想调整量化校准样本条数，改 quantization.samples_count。",
+      "如果以后想调整量化样本抽取方式，改 quantization.sampling_strategy。",
+      "test_data_dir 是旧字段，主要给其他流程保留；量化校准优先读取 calibration_data_dir。"
+    ],
+    "paths": {
+      "weights_pth": "要导出的 PyTorch 权重路径。",
+      "onnx": "导出的 ONNX 文件路径。",
+      "kmodel": "导出的 K230 kmodel 文件路径。",
+      "scaler_pkl": "PC 侧使用的 StandardScaler pkl 路径。",
+      "scaler_json": "导出给 K230 使用的 scaler json 路径。",
+      "calibration_npy": "本次量化校准实际使用的样本会保存到这里，方便回看。",
+      "calibration_data_dir": "量化校准数据目录。build_kmodel.py 会优先从这个目录读取 CSV 来生成量化样本。",
+      "test_data_dir": "旧的样本目录字段；如果 calibration_data_dir 没写，才会回退到这里。",
+      "predictions_csv": "保留给其他流程使用的预测输出路径。",
+      "nncase_dump_dir": "nncase 编译时的中间输出目录。"
+    },
+    "data": {
+      "base_window_size": "基础切窗长度。当前模型输入长度对应 500。",
+      "base_step": "基础窗口步长。当前 250 表示相邻窗口重叠一半。",
+      "sequence_length": "序列长度。当前模型是单窗输入，所以填 1。",
+      "sequence_step": "序列滑动步长。sequence_length=1 时通常也填 1。"
+    },
+    "preprocessing": {
+      "feature_mode": "可填 raw / window_demean。当前模型使用 window_demean，PC / 导出 / K230 三边要保持一致。",
+      "filter_type": "当前保留字段，可先保持 none。"
+    },
+    "model": {
+      "conv_filters": "每层卷积输出通道数，要和训练时一致。",
+      "kernel_size": "卷积核大小，要和训练时一致。",
+      "pool_size": "池化核大小，要和训练时一致。"
+    },
+    "quantization": {
+      "samples_count": "量化校准时最终实际使用多少条样本。不是 CSV 文件数，而是切窗并标准化后的样本条数。",
+      "sampling_strategy": "量化样本怎么抽。可填：first / uniform / random。",
+      "sampling_strategy_values": {
+        "first": "按当前样本顺序取前 N 条。",
+        "uniform": "从全部样本里均匀抽 N 条。",
+        "random": "从全部样本里随机抽 N 条。"
+      },
+      "random_seed": "只有 sampling_strategy=random 时才有意义。固定后每次随机抽样结果一致，方便复现。",
+      "quant_type": "激活值量化类型，当前常用 uint8。",
+      "weight_quant_type": "权重量化类型，当前常用 uint8。",
+      "calibrate_method": "量化范围估计方法。当前常见可填：NoClip / Kld。"
+    }
+  },
   "paths": {
-    "weights_pth": "model/model_run020.pth",
-    "onnx": "../raw_cnn_k230/model/model_run020.onnx",
-    "kmodel": "../raw_cnn_k230/model/model_run020.kmodel",
-    "scaler_pkl": "model/scaler_run020.pkl",
-    "scaler_json": "../raw_cnn_k230/model/scaler_run020.json",
+    "weights_pth": "model/cnn_all_20260317_030406.pth",
+    "onnx": "../raw_cnn_k230/model/cnn_all_20260317_030406.onnx",
+    "kmodel": "../raw_cnn_k230/model/cnn_all_20260317_030406.kmodel",
+    "scaler_pkl": "model/scaler_20260317_030406.pkl",
+    "scaler_json": "../raw_cnn_k230/model/scaler_20260317_030406.json",
     "calibration_npy": "../raw_cnn_k230/model/calibration_input.npy",
+    "calibration_data_dir": "D:/code/network/VQ_Estimator/data/generated_dry_temp_csv",
     "test_data_dir": "test_data",
     "predictions_csv": "../raw_cnn_k230/predictions_k230.csv",
     "nncase_dump_dir": "../raw_cnn_k230/model/nncase_dump"
@@ -18,22 +68,24 @@
     "sequence_step": 1
   },
   "preprocessing": {
-    "feature_mode": "raw",
+    "feature_mode": "window_demean",
     "filter_type": "none"
   },
   "model": {
     "type": "CNN-All",
     "conv_filters": [
-      32,
-      64
+      16,
+      32
     ],
-    "kernel_size": 5,
-    "pool_size": 1
+    "kernel_size": 3,
+    "pool_size": 2
   },
   "quantization": {
-    "samples_count": 64,
+    "samples_count": 256,
+    "sampling_strategy": "first",
+    "random_seed": 20260330,
     "quant_type": "uint8",
     "weight_quant_type": "uint8",
-    "calibrate_method": "NoClip"
+    "calibrate_method": "Kld"
   }
 }
