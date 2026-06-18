@@ -13,6 +13,7 @@
 | `raw_cnn_pc/infer.py` | PC 端按推理配置加载 `.pth` 和 scaler，对 CSV 数据切窗、标准化并输出预测结果。 |
 | `raw_cnn_pc/build_kmodel.py` | PC 端导出部署产物：读取导出配置，生成 ONNX、scaler JSON、校准数据，并调用 nncase 编译 KModel。 |
 | `raw_cnn_pc/compare_pth_kmodel.py` | 对同一批样本分别跑 PyTorch `.pth` 和 KModel simulator，输出总体、按 CSV、按干度的误差报告。 |
+| `raw_cnn_pc/gui_app.py` | 本地 Web 工作台，自动扫描 PTH、scaler、KModel、配置和数据目录，把 `infer.py`、`build_kmodel.py`、`compare_pth_kmodel.py` 的常用参数变成页面选择或填写。 |
 | `raw_cnn_pc/run_pth_csv_compare_gui.py` | 带 GUI 的 PTH/CSV 对比入口，方便手动选择配置和数据跑验证。 |
 
 ## PC 端量化评估
