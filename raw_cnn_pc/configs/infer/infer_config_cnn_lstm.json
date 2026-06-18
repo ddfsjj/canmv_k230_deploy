@@ -1,0 +1,37 @@
+{
+  "name": "raw_cnn_pc_cnn_lstm_20260423_093940",
+  "data": {
+    "test_data_dir": "data/880k_data_260414",
+    "base_window_size": 500,
+    "base_step": 200,
+    "sequence_length": 5,
+    "sequence_step": 1
+  },
+  "preprocessing": {
+    "feature_mode": "window_demean",
+    "filter_type": "none"
+  },
+  "model": {
+    "type": "CNN-LSTM",
+    "cnn_lstm_conv_filters": [
+      16,
+      32
+    ],
+    "cnn_lstm_kernel_size": 3,
+    "cnn_lstm_pool_size": 2,
+    "cnn_lstm_units": 20,
+    "lstm_hidden_size": 20,
+    "lstm_num_layers": 1,
+    "lstm_dropout": 0.0,
+    "lstm_bidirectional": false,
+    "weights_path": "../raw_cnn_k230/model/cnn-lstm/cnn_lstm_20260423_093940.pth"
+  },
+  "normalization": {
+    "type": "StandardScaler",
+    "scaler_path": "../raw_cnn_k230/model/cnn-lstm/scaler_20260423_093940.pkl"
+  },
+  "runtime": {
+    "device": "cpu",
+    "max_samples": null
+  }
+}

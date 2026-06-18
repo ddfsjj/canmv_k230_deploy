@@ -1,0 +1,33 @@
+{
+  "__comment_file_purpose": "这个配置专门用于比较 20260317 这版 CNN-only 模型的 PC 推理与 kmodel 模拟效果。它不带 LSTM，主要用来验证当前高干度量化问题是不是由 CNN-LSTM 结构本身放大的。",
+  "name": "raw_cnn_pc_cnn_20260317",
+  "data": {
+    "test_data_dir": "test_data",
+    "base_window_size": 500,
+    "base_step": 200,
+    "sequence_length": 1,
+    "sequence_step": 1
+  },
+  "preprocessing": {
+    "feature_mode": "window_demean",
+    "filter_type": "none"
+  },
+  "model": {
+    "type": "CNN",
+    "conv_filters": [
+      16,
+      32
+    ],
+    "kernel_size": 3,
+    "pool_size": 2,
+    "weights_path": "model/cnn_all_20260317_030406.pth"
+  },
+  "normalization": {
+    "type": "StandardScaler",
+    "scaler_path": "model/scaler_20260317_030406.pkl"
+  },
+  "runtime": {
+    "device": "cpu",
+    "max_samples": null
+  }
+}

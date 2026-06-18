@@ -1,0 +1,75 @@
+{
+  "__comment_file_purpose": "大将军，这个文件用于 20260412_125022 版新 CNN-LSTM 模型的全量量化方案评估。这里不再区分高干度或低干度子集，而是直接基于全量校准数据做抽样，让每个干度区间都尽量取到一些样本。",
+  "__comment_sampling_principle": [
+    "per_dryness_uniform 方案会先按干度分组，再尽量给每个干度分到一些样本，最符合‘每个干度取一点’这个目标。",
+    "uniform 方案只是在全量候选样本上均匀抽点，不保证每个干度都覆盖到。",
+    "random 方案会在全量候选样本中随机抽点，适合观察随机覆盖下的稳定性。",
+    "first 方案保留作基线，只用来和旧流程对照，不作为优先推荐方案。"
+  ],
+  "__comment_result_storage": [
+    "后续每个方案都会分别生成 export_config、build_info、summary、details、per_csv、per_dryness。",
+    "这样可以按方案单独看结果，不会再和高干度专项文件混在一起。"
+  ],
+  "schemes": [
+    {
+      "__comment": "旧式基线，对照当前历史流程。",
+      "id": "baseline_first256_kld",
+      "title": "baseline first256 kld",
+      "samples_count": 256,
+      "sampling_strategy": "first",
+      "quant_type": "int8",
+      "weight_quant_type": "int8",
+      "calibrate_method": "Kld"
+    },
+    {
+      "__comment": "按干度分层均匀抽 1024 条，目标是让每个干度区间都尽量分到一些样本。",
+      "id": "perdry1024_kld",
+      "title": "perdry1024 kld",
+      "samples_count": 1024,
+      "sampling_strategy": "per_dryness_uniform",
+      "quant_type": "int8",
+      "weight_quant_type": "int8",
+      "calibrate_method": "Kld"
+    },
+    {
+      "__comment": "按干度分层均匀抽 1024 条 + NoClip，验证 Kld 是否带来额外截断。",
+      "id": "perdry1024_noclip",
+      "title": "perdry1024 noclip",
+      "samples_count": 1024,
+      "sampling_strategy": "per_dryness_uniform",
+      "quant_type": "int8",
+      "weight_quant_type": "int8",
+      "calibrate_method": "NoClip"
+    },
+    {
+      "__comment": "全量候选样本上随机抽 1024 条，观察随机覆盖的量化稳定性。",
+      "id": "random1024_kld",
+      "title": "random1024 kld",
+      "samples_count": 1024,
+      "sampling_strategy": "random",
+      "quant_type": "int8",
+      "weight_quant_type": "int8",
+      "calibrate_method": "Kld"
+    },
+    {
+      "__comment": "激活 int16、权重 uint8，验证更高激活精度是否有帮助。",
+      "id": "i16u8_kld256",
+      "title": "i16u8 kld256",
+      "samples_count": 256,
+      "sampling_strategy": "first",
+      "quant_type": "int16",
+      "weight_quant_type": "uint8",
+      "calibrate_method": "Kld"
+    },
+    {
+      "__comment": "激活 uint8、权重 int16，验证提高权重位宽是否更有效。",
+      "id": "u8i16_kld256",
+      "title": "u8i16 kld256",
+      "samples_count": 256,
+      "sampling_strategy": "first",
+      "quant_type": "uint8",
+      "weight_quant_type": "int16",
+      "calibrate_method": "Kld"
+    }
+  ]
+}

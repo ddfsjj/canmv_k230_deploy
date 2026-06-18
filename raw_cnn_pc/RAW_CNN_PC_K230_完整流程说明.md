@@ -1,682 +1,1173 @@
-# Raw CNN（PC + K230）完整流程说明
+# RAW CNN PC + K230 完整流程说明
 
-本文档基于当前仓库里的这两部分代码：
-- `raw_cnn_pc/`：PC 侧验证 `.pth`、导出 `.onnx/.kmodel`
-- `raw_cnn_k230/`：K230 板端运行 `.kmodel`
+这份文档只保留当前实际使用的主流程，避免在旧配置、旧脚本之间来回找。
 
-本文档重点解决 4 个实际问题：
-- 换了新的 `pth` 之后，PC 侧到底先改哪里
-- PC 侧要先后运行哪些脚本
-- K230 侧哪些地方必须改，哪些地方不用改
-- 样本数量如何写到配置里，而不是每次都在命令行输入
+当前主线是 `CNN-TCN`：
 
-## 1. 目录分工
+- PC 端目录：`raw_cnn_pc/`
+- K230 板端目录：`raw_cnn_k230/`
+- PC 推理配置：`raw_cnn_pc/configs/infer/infer_config_cnn_tcn.json`
+- PC 导出配置：`raw_cnn_pc/configs/export/k230_export_config_cnn_tcn.json`
+- 板端运行配置：`raw_cnn_k230/configs/k230_config_cnn_tcn.json`
+- PC 端生成 kmodel 入口：`raw_cnn_pc/build_kmodel.py`
+- 板端运行入口：`raw_cnn_k230/run_k230_infer.py`
 
-`raw_cnn_pc/` 负责：
-- 使用 `infer.py` 在 PC 上验证 `.pth` 推理结果
-- 使用 `build_kmodel.py` 导出 `onnx`、`scaler json`、`calibration npy`，并编译生成 `kmodel`
-- 按 `k230_export_config.json` 中的目标路径，把导出产物写到 `../raw_cnn_k230/model/`
+当前已经验证可上板的模型是：
 
-`raw_cnn_k230/` 负责：
-- 使用 `run_k230_infer.py` 在板端加载 `kmodel` 和 `scaler json`
-- 读取 `k230_config.json` 中的路径、切窗参数、运行模式、UART 参数
-- 离线模式下读取本地 `test_data/*.csv`
-- 在线模式下通过 UART 实时收数据并返回结果
-- 使用 `run_k230_csv_compare.py` 做板端离线对比
+```text
+raw_cnn_pc/model/cnn-tcn/train_model_bundle_cnn_tcn_20260415_074057/cnn_tcn.pth
+raw_cnn_pc/model/cnn-tcn/train_model_bundle_cnn_tcn_20260415_074057/scaler.pkl
+raw_cnn_k230/model/cnn_tcn_20260415_074057_i16u8_kld512.kmodel
+raw_cnn_k230/model/scaler_cnn_tcn_20260415_074057_i16u8_kld512.json
+```
 
-## 2. 三个关键配置文件分别控制什么
-
-### 2.1 `raw_cnn_pc/infer_config.json`
-
-它决定 PC 上 `infer.py` 怎么跑：
-- `data.test_data_dir`：PC 侧测试数据目录
-- `data.base_window_size/base_step/sequence_length/sequence_step`：切窗参数
-- `preprocessing.feature_mode`：当前预处理方式，当前常用是 `window_demean`
-- `model.conv_filters/kernel_size/pool_size`：网络结构参数
-- `model.weights_path`：要加载的 `.pth`
-- `normalization.scaler_path`：要加载的 `.pkl`
-- `runtime.max_samples`：PC 侧默认跑多少条样本，`null` 表示全量
-
-一句话：这个文件控制“PC 用什么模型、什么切窗参数、什么 scaler、默认跑多少条样本去做 `.pth` 推理”。
-
-### 2.2 `raw_cnn_pc/k230_export_config.json`
-
-它决定 `build_kmodel.py` 导出什么、导出到哪里：
-- `paths.weights_pth`：导出时使用的 `.pth`
-- `paths.scaler_pkl`：导出时使用的 `.pkl`
-- `paths.onnx`：导出的 `.onnx` 路径
-- `paths.kmodel`：导出的 `.kmodel` 路径
-- `paths.scaler_json`：导出的 `scaler json` 路径
-- `paths.calibration_npy`：量化校准样本保存路径
-- `data.*`：切窗参数，必须和训练时一致
-- `preprocessing.feature_mode`：导出时的预处理方式，必须和 PC / K230 一致
-- `model.*`：网络结构参数，必须和训练时一致
-- `quantization.*`：量化参数
-
-一句话：这个文件控制“把哪个 `.pth` 编译成哪个 `.kmodel`，并把产物放到 `raw_cnn_k230/` 的哪里”。
-
-当前仓库里，这个配置文件已经额外带了一个 `_help` 说明区块。
-大将军以后如果忘了某个字段是什么意思，直接打开 `k230_export_config.json` 看 `_help` 即可，不用先翻代码。
-
-量化校准这块以后最常改的就是这几个字段：
-- `paths.calibration_data_dir`：量化校准数据目录
-- `quantization.samples_count`：量化校准样本条数
-- `quantization.sampling_strategy`：量化校准样本抽取方式
-- `quantization.random_seed`：随机抽样时的固定种子
-- `quantization.calibrate_method`：量化范围估计方法
-
-如果你只是以后换一批量化数据，通常只需要改：
-- `paths.calibration_data_dir`
-
-### 2.3 `raw_cnn_k230/k230_config.json`
-
-它决定 K230 板端运行时读哪些文件、按什么模式跑：
-- `paths.kmodel`：板端加载哪个 `.kmodel`
-- `paths.scaler_json`：板端加载哪个 `scaler json`
-- `paths.test_data_dir`：离线模式下测试数据目录
-- `paths.predictions_csv`：板端输出的预测 CSV 文件名
-- `data.*`：板端切窗参数，必须和导出侧一致
-- `preprocessing.feature_mode`：板端预处理方式，必须和 PC / 导出侧一致
-- `runtime.mode`：运行模式，例如 `uart_online` 或 `csv_cached`
-- `runtime.max_samples/infer_batch_size/write_predictions_csv`：`run_k230_infer.py` 离线模式时控制样本数和输出
-- `runtime.compare_max_samples`：`run_k230_csv_compare.py` 默认跑多少条，`null` 表示全量
-- `uart.*`：串口参数
-
-一句话：这个文件控制“K230 实际运行时读哪个模型、用哪套参数、默认跑多少条、以哪种模式运行”。
-
-## 3. 样本数量现在优先写在配置里
-
-当前代码已经支持“直接点运行脚本，就按配置文件里的样本数量执行”。
-
-### 3.1 PC 侧怎么控制数量
-
-看 `raw_cnn_pc/infer_config.json`：
+当前推荐量化方案：
 
 ```json
-"runtime": {
-  "device": "cpu",
-  "max_samples": null
+{
+  "quant_type": "int16",
+  "weight_quant_type": "uint8",
+  "calibrate_method": "Kld",
+  "samples_count": 512,
+  "sampling_strategy": "per_dryness_uniform"
 }
 ```
 
-含义如下：
-- `max_samples: null`：全量跑
-- `max_samples: 10`：只跑前 10 条
-- `max_samples: 50`：只跑前 50 条
+原因：`074057` 用 `NoClip` 时出现过固定大输出饱和，`Kld` 明显更稳。
 
-也就是说：
-- 你直接点运行 `infer.py`，它默认就读这里
-- 你不想每次命令行传 `--max_samples`，就改这个字段
+## 1. 三个核心配置文件
 
-### 3.2 K230 离线对比怎么控制数量
+只要跑当前 CNN-TCN 主线，优先只看这三份。
 
-看 `raw_cnn_k230/k230_config.json`：
+### 1.1 PC 推理配置
+
+文件：
+
+```text
+raw_cnn_pc/configs/infer/infer_config_cnn_tcn.json
+```
+
+作用：
+
+- 控制 PC 端 `.pth` 推理。
+- 决定用哪个 `.pth`。
+- 决定用哪个 `scaler.pkl`。
+- 决定测试数据目录、切窗参数、预处理方式。
+
+最常改：
 
 ```json
-"runtime": {
-  "compare_max_samples": 10
+{
+  "data": {
+    "test_data_dir": "data/880k_data_260414",
+    "base_window_size": 500,
+    "base_step": 200,
+    "sequence_length": 5,
+    "sequence_step": 1
+  },
+  "preprocessing": {
+    "feature_mode": "window_demean"
+  },
+  "model": {
+    "weights_path": "model/cnn-tcn/你的模型目录/cnn_tcn.pth"
+  },
+  "normalization": {
+    "scaler_path": "model/cnn-tcn/你的模型目录/scaler.pkl"
+  }
 }
 ```
 
-含义如下：
-- `compare_max_samples: null`：全量跑
-- `compare_max_samples: 10`：只跑前 10 条
-- `compare_max_samples: 50`：只跑前 50 条
+### 1.2 PC 导出配置
 
-也就是说：
-- 你直接点运行 `run_k230_csv_compare.py`，它默认就读这里
-- 你不想每次改脚本或命令行，就改这个字段
+文件：
 
-### 3.3 什么时候还需要命令行参数
+```text
+raw_cnn_pc/configs/export/k230_export_config_cnn_tcn.json
+```
 
-命令行参数现在仍然能用，但建议只在“临时覆盖配置”的时候使用。
+作用：
+
+- 控制从 `.pth` 导出到 `.onnx/.kmodel/scaler_json`。
+- 控制量化校准数据来源。
+- 控制量化方案。
+- 控制导出文件名。
+
+最常改：
+
+```json
+{
+  "paths": {
+    "weights_pth": "model/cnn-tcn/你的模型目录/cnn_tcn.pth",
+    "scaler_pkl": "model/cnn-tcn/你的模型目录/scaler.pkl",
+    "onnx": "../raw_cnn_k230/model/你的模型名.onnx",
+    "kmodel": "../raw_cnn_k230/model/你的模型名.kmodel",
+    "scaler_json": "../raw_cnn_k230/model/scaler_你的模型名.json",
+    "calibration_npy": "../raw_cnn_k230/model/你的模型名_calibration_input.npy",
+    "calibration_data_dir": "data/880k_data_260414",
+    "test_data_dir": "data/880k_data_260414",
+    "predictions_csv": "../raw_cnn_k230/predictions_你的模型名.csv",
+    "nncase_dump_dir": "../raw_cnn_k230/model/nncase_dump_你的模型名"
+  },
+  "quantization": {
+    "samples_count": 512,
+    "sampling_strategy": "per_dryness_uniform",
+    "random_seed": 20260414,
+    "quant_type": "int16",
+    "weight_quant_type": "uint8",
+    "calibrate_method": "Kld"
+  }
+}
+```
+
+### 1.3 板端运行配置
+
+文件：
+
+```text
+raw_cnn_k230/configs/k230_config_cnn_tcn.json
+```
+
+作用：
+
+- 控制 K230 加载哪个 `kmodel`。
+- 控制 K230 加载哪个 `scaler_json`。
+- 控制离线 CSV 数据目录。
+- 控制运行模式：离线 CSV 或在线 UART。
+- 控制串口协议参数。
+
+最常改：
+
+```json
+{
+  "paths": {
+    "kmodel": "model/你的模型名.kmodel",
+    "scaler_json": "model/scaler_你的模型名.json",
+    "test_data_dir": "data/880k_data_260414",
+    "predictions_csv": "predictions_你的模型名.csv"
+  },
+  "runtime": {
+    "mode": "csv_cached"
+  }
+}
+```
+
+注意：`kmodel` 和 `scaler_json` 必须来自同一次导出，不能混用。
+
+## 2. 新模型换上板流程
+
+如果 CNN-TCN 网络结构不变，只换新的 `.pth/.pkl`，按这一节做。
+
+### 第 1 步：放入新模型
+
+建议每个模型单独一个目录，例如：
+
+```text
+raw_cnn_pc/model/cnn-tcn/你的模型目录/cnn_tcn.pth
+raw_cnn_pc/model/cnn-tcn/你的模型目录/scaler.pkl
+raw_cnn_pc/model/cnn-tcn/你的模型目录/cnn_tcn.meta.json
+```
+
+### 第 2 步：改 PC 推理配置
+
+改：
+
+```text
+raw_cnn_pc/configs/infer/infer_config_cnn_tcn.json
+```
+
+只换模型时，重点改这两处：
+
+```json
+"weights_path": "model/cnn-tcn/你的模型目录/cnn_tcn.pth"
+```
+
+```json
+"scaler_path": "model/cnn-tcn/你的模型目录/scaler.pkl"
+```
+
+### 第 3 步：改 PC 导出配置
+
+改：
+
+```text
+raw_cnn_pc/configs/export/k230_export_config_cnn_tcn.json
+```
+
+至少确认这些路径都换成同一个模型名：
+
+```json
+"weights_pth": "model/cnn-tcn/你的模型目录/cnn_tcn.pth",
+"scaler_pkl": "model/cnn-tcn/你的模型目录/scaler.pkl",
+"onnx": "../raw_cnn_k230/model/你的模型名.onnx",
+"kmodel": "../raw_cnn_k230/model/你的模型名.kmodel",
+"scaler_json": "../raw_cnn_k230/model/scaler_你的模型名.json",
+"calibration_npy": "../raw_cnn_k230/model/你的模型名_calibration_input.npy",
+"nncase_dump_dir": "../raw_cnn_k230/model/nncase_dump_你的模型名"
+```
+
+文件名建议带上：
+
+- 模型时间或版本号。
+- 量化类型。
+- 校准方法。
+- 校准样本数。
 
 例如：
-- 平时默认跑全量，配置里写 `null`
-- 今天只想临时抽 10 条，就命令行传 `--max_samples 10`
 
-如果没有这种临时需求，建议一直改配置，不要每次都在输入行里写数量。
+```text
+cnn_tcn_20260415_074057_i16u8_kld512.kmodel
+scaler_cnn_tcn_20260415_074057_i16u8_kld512.json
+```
 
-## 4. 第一次完整跑通流程
+### 第 4 步：生成 kmodel
 
-下面默认命令都在仓库根目录执行：`d:\code\network\canmv_k230_deploy`
+在 PC 上运行：
 
-### 4.1 安装依赖
-
-先安装 PC 推理依赖：
-
-```bash
+```powershell
 cd raw_cnn_pc
-pip install -r requirements.txt
+..\.venv\Scripts\python.exe build_kmodel.py
 ```
 
-如果还需要导出 `kmodel`，再安装导出依赖：
+等价于显式指定当前默认导出配置：
 
-```bash
+```powershell
+..\.venv\Scripts\python.exe build_kmodel.py --config configs/export/k230_export_config_cnn_tcn.json
+```
+
+成功时会看到：
+
+```text
+Exported ONNX: ...
+Exported scaler json: ...
+Saved calibration data: ...
+Generated kmodel: ...
+```
+
+生成结果在：
+
+```text
+raw_cnn_k230/model/
+```
+
+至少需要：
+
+```text
+你的模型名.kmodel
+scaler_你的模型名.json
+```
+
+### 第 5 步：PC 端验证 kmodel
+
+不要生成完就直接上板，先在 PC 上对比 PTH / ONNX / KMODEL。
+
+```powershell
 cd raw_cnn_pc
-pip install -r requirements_k230_host.txt
+..\.venv\Scripts\python.exe compare_pth_onnx_kmodel_gui.py
+  --summary_json artifacts/reports/你的模型名_summary.json `
+  --details_csv artifacts/reports/你的模型名_details.csv `
+  --per_csv_csv artifacts/reports/你的模型名_per_csv.csv `
+  --per_dryness_csv artifacts/reports/你的模型名_per_dryness.csv
 ```
 
-如果 `nncase` 报 `.NET Runtime` 相关错误，再安装 .NET Runtime 7：
+重点看：
 
-```bash
-winget install --id Microsoft.DotNet.Runtime.7 -e --silent --accept-package-agreements --accept-source-agreements
+```text
+pth_mae_vs_true
+onnx_mae_vs_true
+kmodel_mae_vs_true
+pth_vs_onnx_mae
+pth_vs_kmodel_mae
+pth_vs_kmodel_max_abs
 ```
 
-### 4.2 先在 PC 验证 `.pth`
+判断：
 
-如果你已经在 `infer_config.json` 里写好了 `runtime.max_samples`，直接运行：
+- `pth_vs_onnx_mae` 应该接近 0，通常是 `1e-7` 级别。
+- `kmodel_mae_vs_true` 明显变大，说明量化后不稳定。
+- 多个样本输出同一个很大的固定值，通常是量化饱和。
+- 饱和时优先把 `calibrate_method` 改成 `Kld`。
 
-```bash
-cd raw_cnn_pc
-python infer.py --config infer_config.json
+当前 `074057_i16u8_kld512` 的验证结果：
+
+```text
+pth_mae_vs_true: 0.037184
+onnx_mae_vs_true: 0.037184
+kmodel_mae_vs_true: 0.116889
+pth_vs_kmodel_mae: 0.103242
 ```
 
-如果你想临时覆盖配置，也可以这样运行：
+### 第 6 步：改板端配置
 
-```bash
-cd raw_cnn_pc
-python infer.py --config infer_config.json --max_samples 10 --output predictions_pc_quick.csv
+改：
+
+```text
+raw_cnn_k230/configs/k230_config_cnn_tcn.json
 ```
 
-确认以下几项：
-- 没有 `load_state_dict` 报错
-- 日志里能看到 `samples`、`input_shape`、`MAE`、`RMSE`
-- 生成了预测 CSV
+把路径指向新生成的板端文件：
 
-如果这里只跑不通，不要继续导出 `kmodel`，先把 PC 侧模型配置问题解决。
-
-### 4.3 导出 `kmodel`
-
-完整导出并编译：
-
-```bash
-cd raw_cnn_pc
-python build_kmodel.py --config k230_export_config.json
+```json
+"paths": {
+  "kmodel": "model/你的模型名.kmodel",
+  "scaler_json": "model/scaler_你的模型名.json",
+  "test_data_dir": "data/880k_data_260414",
+  "predictions_csv": "predictions_你的模型名.csv"
+}
 ```
 
-只想先导出 `onnx/scaler/calibration`，先不编译：
+## 3. 板端怎么跑
 
-```bash
-cd raw_cnn_pc
-python build_kmodel.py --config k230_export_config.json --skip_compile
+板端目录建议保持：
+
+```text
+/sdcard/raw_cnn_k230/
 ```
 
-需要临时改校准样本数：
+至少需要拷贝：
 
-```bash
-cd raw_cnn_pc
-python build_kmodel.py --config k230_export_config.json --max_calib_samples 128
+```text
+/sdcard/raw_cnn_k230/run_k230_infer.py
+/sdcard/raw_cnn_k230/run_k230_csv_compare.py
+/sdcard/raw_cnn_k230/configs/k230_config_cnn_tcn.json
+/sdcard/raw_cnn_k230/model/你的模型名.kmodel
+/sdcard/raw_cnn_k230/model/scaler_你的模型名.json
 ```
 
-### 4.4 检查导出产物
+如果跑离线 CSV，还需要：
 
-按当前仓库默认配置，导出产物会写到：
-- `raw_cnn_k230/model/cnn_all_20260317_030406.onnx`
-- `raw_cnn_k230/model/cnn_all_20260317_030406.kmodel`
-- `raw_cnn_k230/model/scaler_20260317_030406.json`
-- `raw_cnn_k230/model/calibration_input.npy`
+```text
+/sdcard/raw_cnn_k230/data/880k_data_260414/
+```
 
-这里一定要看一眼：
-- `raw_cnn_k230/model/` 下是否确实生成了新的 `.onnx/.kmodel/.json/.npy`
-- 文件名是否和你期望部署到板端的文件名一致
+如果跑在线 UART，不需要 CSV 数据目录。
 
-### 4.5 拷贝到板端
+### 3.1 离线 CSV 测试
 
-建议直接拷贝整个目录：
-- 本地 `raw_cnn_k230/`
-- 板端 `/sdcard/raw_cnn_k230/`
+配置：
 
-至少需要这些文件：
-- `run_k230_infer.py`
-- `run_k230_csv_compare.py`
-- `k230_config.json`
-- `model/*.kmodel`
-- `model/*.json`
-- `test_data/*.csv`，如果你要做板端离线对比
+```json
+"runtime": {
+  "mode": "csv_cached"
+}
+```
 
-### 4.6 板端运行
-
-如果你要跑正常在线 UART 推理：
+运行：
 
 ```python
 cd /sdcard/raw_cnn_k230
 python run_k230_infer.py
 ```
 
-如果你要跑板端离线对比：
+输出：
 
-先看 `raw_cnn_k230/k230_config.json` 里的：
-- `runtime.compare_max_samples`
+- 每条样本预测值。
+- 总体 MAE / RMSE。
+- 预测 CSV。
 
-然后直接运行：
+输出 CSV 文件名会自动带上当前 kmodel 名，避免多次测试混在一起。
+
+### 3.2 离线 CSV 对比工具
+
+如果想要更偏“对比分析”的输出，运行：
 
 ```python
 cd /sdcard/raw_cnn_k230
 python run_k230_csv_compare.py
 ```
 
-这时：
-- `compare_max_samples = 10`：只跑前 10 条
-- `compare_max_samples = null`：全量跑
+它和 `run_k230_infer.py` 的区别：
 
-## 5. 换了新的 `pth` 之后，PC 侧到底要怎么操作
+- `run_k230_infer.py` 是正式入口，按 `runtime.mode` 跑。
+- `run_k230_csv_compare.py` 是离线分析工具，会输出更多按 CSV 汇总的对比结果。
 
-这一节最常用，建议严格按顺序做。
+### 3.3 在线 UART 测试
 
-### 5.1 情况 A：只换了权重和 scaler，网络结构没变
-
-适用前提：
-- 还是当前这套 `CNN-All`
-- `conv_filters/kernel_size/pool_size` 不变
-- `base_window_size/base_step/sequence_length/sequence_step` 不变
-- `feature_mode` 不变
-
-这时你只需要改“文件路径”和“默认跑多少条”，不需要改网络结构参数。
-
-#### 第 1 步：把新文件放到 PC 模型目录
-
-把新的：
-- `xxx.pth`
-- `xxx.pkl`
-
-放到：
-- `raw_cnn_pc/model/`
-
-建议文件名带日期或版本号，避免覆盖不清楚，例如：
-- `raw_cnn_pc/model/cnn_all_20260327_xxx.pth`
-- `raw_cnn_pc/model/scaler_20260327_xxx.pkl`
-
-#### 第 2 步：修改 `infer_config.json`
-
-至少改这两个字段：
-- `model.weights_path`
-- `normalization.scaler_path`
-
-例如：
-
-```json
-"model": {
-  "weights_path": "model/cnn_all_20260327_xxx.pth"
-},
-"normalization": {
-  "scaler_path": "model/scaler_20260327_xxx.pkl"
-}
-```
-
-如果你还想控制“直接点运行 `infer.py` 时默认跑多少条”，同时设置：
-- `runtime.max_samples`
-
-建议：
-- 联调时设成 `10` 或 `20`
-- 正式全量验证时设成 `null`
-
-#### 第 3 步：修改 `k230_export_config.json`
-
-至少改这两个字段：
-- `paths.weights_pth`
-- `paths.scaler_pkl`
-
-如果你希望导出的板端文件名也换版本，建议同时改：
-- `paths.onnx`
-- `paths.kmodel`
-- `paths.scaler_json`
-
-例如：
-
-```json
-"paths": {
-  "weights_pth": "model/cnn_all_20260327_xxx.pth",
-  "scaler_pkl": "model/scaler_20260327_xxx.pkl",
-  "onnx": "../raw_cnn_k230/model/cnn_all_20260327_xxx.onnx",
-  "kmodel": "../raw_cnn_k230/model/cnn_all_20260327_xxx.kmodel",
-  "scaler_json": "../raw_cnn_k230/model/scaler_20260327_xxx.json"
-}
-```
-
-#### 第 4 步：先跑 PC 侧 `.pth` 验证
-
-如果你已经在 `infer_config.json` 里设好了数量，直接运行：
-
-```bash
-cd raw_cnn_pc
-python infer.py --config infer_config.json
-```
-
-如果你想临时覆盖配置，再使用命令行参数。
-
-例如快速冒烟：
-
-```bash
-cd raw_cnn_pc
-python infer.py --config infer_config.json --max_samples 10 --output predictions_pc_quick.csv
-```
-
-例如全量：
-
-```bash
-cd raw_cnn_pc
-python infer.py --config infer_config.json --output predictions_pc_all.csv
-```
-
-先看 4 件事：
-- 能否正常加载新 `.pth`
-- `input_shape` 是否符合预期
-- `MAE/RMSE` 是否正常
-- 预测 CSV 是否已生成
-
-#### 第 5 步：PC 验证通过后，再导出 `kmodel`
-
-```bash
-cd raw_cnn_pc
-python build_kmodel.py --config k230_export_config.json
-```
-
-导出完成后，检查 `raw_cnn_k230/model/` 里是否出现了你刚才配置的新文件名。
-
-### 5.2 情况 B：不仅换了权重，连网络结构或切窗参数也变了
-
-如果下面任意一项改了，就不是“只换路径”，而是“配置联动修改”：
-- `conv_filters`
-- `kernel_size`
-- `pool_size`
-- `base_window_size`
-- `base_step`
-- `sequence_length`
-- `sequence_step`
-- `feature_mode`
-
-这时必须同步修改 3 个地方。
-
-#### PC 推理配置要改
-
-文件：`raw_cnn_pc/infer_config.json`
-
-需要同步：
-- `data.*`
-- `preprocessing.feature_mode`
-- `model.conv_filters/kernel_size/pool_size`
-- `model.weights_path`
-- `normalization.scaler_path`
-- `runtime.max_samples`，按你的联调需要设置
-
-#### K230 导出配置要改
-
-文件：`raw_cnn_pc/k230_export_config.json`
-
-需要同步：
-- `data.*`
-- `preprocessing.feature_mode`
-- `model.conv_filters/kernel_size/pool_size`
-- `paths.weights_pth`
-- `paths.scaler_pkl`
-- 必要时 `paths.onnx/kmodel/scaler_json`
-
-#### K230 运行配置要改
-
-文件：`raw_cnn_k230/k230_config.json`
-
-至少同步：
-- `data.*`
-- `preprocessing.feature_mode`
-
-如果你导出的文件名也变了，还要同步：
-- `paths.kmodel`
-- `paths.scaler_json`
-
-如果你要做板端离线对比，还顺便看一下：
-- `runtime.compare_max_samples`
-
-否则会出现这些典型问题：
-- `infer.py` 侧 `load_state_dict(strict=True)` 报 shape 或 key 不匹配
-- `build_kmodel.py` 导出出来的模型输入尺寸和板端配置不一致
-- K230 侧切窗参数不一致，导致输入内容不一样，预测值明显漂移
-
-## 6. 换新模型后，K230 文件夹里到底要改什么
-
-这个问题要分情况。
-
-### 6.1 如果你只是换了 `pth/pkl`，但导出后的板端文件名没变
-
-例如你仍然导出成：
-- `raw_cnn_k230/model/cnn_all_20260317_030406.kmodel`
-- `raw_cnn_k230/model/scaler_20260317_030406.json`
-
-那 K230 侧通常只需要：
-- 确认 `raw_cnn_k230/model/` 下的文件已经被新的导出结果覆盖
-- 不需要改 `k230_config.json` 里的 `paths.kmodel/scaler_json`
-
-也就是说，K230 侧只拷贝新文件即可。
-
-### 6.2 如果你导出的 `kmodel/json` 文件名变了
-
-例如你新导出成：
-- `raw_cnn_k230/model/cnn_all_20260327_xxx.kmodel`
-- `raw_cnn_k230/model/scaler_20260327_xxx.json`
-
-那 K230 侧必须改 `raw_cnn_k230/k230_config.json`：
-
-```json
-"paths": {
-  "kmodel": "model/cnn_all_20260327_xxx.kmodel",
-  "scaler_json": "model/scaler_20260327_xxx.json"
-}
-```
-
-否则板端仍然会去读旧文件。
-
-### 6.3 如果切窗参数或预处理变了
-
-还必须改 `raw_cnn_k230/k230_config.json` 里的：
-- `data.base_window_size`
-- `data.base_step`
-- `data.sequence_length`
-- `data.sequence_step`
-- `preprocessing.feature_mode`
-
-注意：这里必须和 `infer_config.json`、`k230_export_config.json` 保持一致，不能只改一边。
-
-### 6.4 如果你只关心板端离线对比跑多少条
-
-只改这一个字段即可：
+配置：
 
 ```json
 "runtime": {
-  "compare_max_samples": 10
+  "mode": "uart_online"
 }
 ```
 
-需要全量就写：
-
-```json
-"runtime": {
-  "compare_max_samples": null
-}
-```
-
-## 7. 推荐的实际执行顺序
-
-每次换模型，按这个顺序做最稳。
-
-### 7.1 PC 侧顺序
-
-1. 把新的 `pth/pkl` 放到 `raw_cnn_pc/model/`
-2. 改 `raw_cnn_pc/infer_config.json` 的 `weights_path/scaler_path`
-3. 按需要设置 `raw_cnn_pc/infer_config.json` 的 `runtime.max_samples`
-4. 改 `raw_cnn_pc/k230_export_config.json`
-5. 如果结构或切窗变了，同时准备修改 `raw_cnn_k230/k230_config.json`
-6. 跑 `infer.py` 先验证 `.pth`
-7. 验证没问题后，跑 `build_kmodel.py`
-8. 检查 `raw_cnn_k230/model/` 是否生成了新的 `.kmodel/.json`
-
-### 7.2 K230 侧顺序
-
-1. 如果导出文件名变了，先改 `raw_cnn_k230/k230_config.json` 的 `paths.kmodel/scaler_json`
-2. 如果切窗或预处理变了，改 `raw_cnn_k230/k230_config.json` 的 `data.*` 和 `preprocessing.feature_mode`
-3. 如果要做本地 CSV 对比，确认 `runtime.compare_max_samples` 是你要的数量
-4. 把更新后的 `raw_cnn_k230/` 整体拷到板端
-5. 如果要做本地 CSV 对比，运行 `python run_k230_csv_compare.py`
-6. 如果要做串口在线推理，运行 `python run_k230_infer.py`
-
-## 8. PC 与 K230 结果对比怎么做
-
-### 8.1 PC 侧先生成对比 CSV
-
-先在 `raw_cnn_pc/infer_config.json` 里设置：
-
-```json
-"runtime": {
-  "device": "cpu",
-  "max_samples": 10
-}
-```
-
-然后直接运行：
-
-```bash
-cd raw_cnn_pc
-python infer.py --config infer_config.json --output predictions_pc_compare.csv
-```
-
-生成：
-- `raw_cnn_pc/predictions_pc_compare.csv`
-
-如果想全量对比，把 `runtime.max_samples` 改成 `null`，再运行同一条命令即可。
-
-### 8.2 板端生成对比 CSV
-
-先在 `raw_cnn_k230/k230_config.json` 里设置：
-
-```json
-"runtime": {
-  "compare_max_samples": 10
-}
-```
-
-然后直接运行：
+运行：
 
 ```python
 cd /sdcard/raw_cnn_k230
-python run_k230_csv_compare.py
+python run_k230_infer.py
 ```
 
-生成：
-- `/sdcard/raw_cnn_k230/predictions_k230_compare.csv`
+在线模式只依赖：
 
-`run_k230_csv_compare.py` 会自动做这些事：
-- 强制走 `csv_cached`
-- 固定从第 0 条样本开始
-- 默认读取 `runtime.compare_max_samples`
-- 自动关闭 UART
-- 自动写 `predictions_k230_compare.csv`
+- `kmodel`
+- `scaler_json`
+- 串口配置
 
-如果你想全量对比，就把：
+不依赖：
+
+- `test_data_dir`
+- CSV 测试数据
+
+## 4. 离线和在线模式区别
+
+### `csv_cached`
+
+用途：
+
+- 板端直接读 CSV。
+- 验证 kmodel 在板端跑出来是否正常。
+- 不依赖上位机串口发数据。
+
+需要：
+
+```text
+/sdcard/raw_cnn_k230/data/880k_data_260414/
+```
+
+### `uart_online`
+
+用途：
+
+- 实际在线推理。
+- 从串口收实时数据。
+- 达到窗口长度后自动推理并回传。
+
+不需要 CSV 数据。
+
+需要确认：
+
+- `runtime.uart_online.channel_count`
+- `runtime.uart_online.input_value_type`
+- `runtime.uart_online.input_byte_order`
+- `runtime.uart_online.infer_step_frames`
+- `uart.predict_scale`
+- `uart.value_type`
+- `uart.byte_order`
+- `uart.value_count`
+- `uart.header`
+- `uart.tail`
+- 如果启用外层大帧，还要确认 `outer_*` 参数。
+
+## 5. 串口联调完整步骤
+
+串口联调不要一开始就跑 `uart_online`。正确顺序是从“最不依赖模型”的模式开始，一层一层加功能。
+
+推荐顺序：
+
+```text
+1. uart_continuous_send_test.py
+2. uart_echo
+3. uart_frame_return
+4. uart_debug_ack
+5. uart_online
+```
+
+每一步通过后再进入下一步。
+
+### 5.1 第一步：`uart_continuous_send_test.py`
+
+作用：
+
+- 只测试 K230 串口发送能力。
+- 不加载 kmodel。
+- 不读取 CSV。
+- 不解析上位机数据。
+- 用来确认 K230 的 TX 引脚、波特率、帧格式是否正确。
+
+运行文件：
+
+```text
+raw_cnn_k230/uart_continuous_send_test.py
+```
+
+板端运行：
+
+```python
+cd /sdcard/raw_cnn_k230
+python uart_continuous_send_test.py
+```
+
+当前脚本默认发送小帧：
+
+```text
+55 AA + 12 个 4 字节整数 + FC CF
+```
+
+默认参数：
+
+```text
+UART_ID = 2
+TX_PIN = 11
+RX_PIN = 12
+BAUDRATE = 921600
+VALUE_COUNT = 12
+BYTE_ORDER = big
+```
+
+每帧长度：
+
+```text
+2 + 12 * 4 + 2 = 52 bytes
+```
+
+能验证什么：
+
+- K230 TX 引脚是否接对。
+- 上位机 RX 是否能收到数据。
+- 波特率是否一致。
+- 小帧头 `55 AA`、帧尾 `FC CF` 是否一致。
+- 12 路数值是否能按大端 int32 正确解析。
+
+预期现象：
+
+- 上位机持续收到 52 字节小帧。
+- 第一项数值是递增序号。
+- 第二项数值是板端毫秒时间。
+
+如果这一步不通：
+
+- 先不要看模型。
+- 优先查 TX/RX 是否接反。
+- 查 UART ID、引脚、波特率。
+- 查上位机是否按大端 int32 解码。
+
+### 5.2 第二步：`uart_echo`
+
+作用：
+
+- 测试 K230 串口收发闭环。
+- K230 收到什么原样发回什么。
+- 不解析帧头帧尾。
+- 不判断帧长度。
+- 不加载模型。
+
+适合验证：
+
+- 上位机发到 K230 是否通。
+- K230 回到上位机是否通。
+- 双向串口链路是否正常。
+
+配置文件：
+
+```text
+raw_cnn_k230/configs/k230_config_cnn_tcn.json
+```
+
+把模式改成：
 
 ```json
-"compare_max_samples": null
+"runtime": {
+  "mode": "uart_echo"
+}
 ```
 
-写进 `k230_config.json`，然后重新运行同一个脚本。
+相关配置：
 
-### 8.3 两边如何对齐
-
-要让 PC 和 K230 对比有意义，至少保证这几项一致：
-- 两边都从第 0 条样本开始
-- 两边数量一致，例如都跑 10 条或都跑全量
-- 两边使用的是同一份测试数据
-- `data.*` 和 `preprocessing.feature_mode` 完全一致
-
-## 9. 数据与输入约束
-
-- 每个 CSV 只读取第 1 列
-- 非数值会被跳过
-- 标签从文件名提取，规则是取 `-` 前的前缀并转成 `float`
-- 例如 `0.2097-18.79-20.csv` 的标签会被解析成 `0.2097`
-- 文件名如果不符合这个规则，标签会变成 `NaN`
-
-## 10. 常见问题排查
-
-### 10.1 `load_state_dict` 报错
-
-通常说明：
-- `.pth` 和 `infer_config.json` 里的 `model.*` 不匹配
-- 结构变了，但你只改了路径，没有改 `conv_filters/kernel_size/pool_size`
-
-### 10.2 `No valid samples found under ...`
-
-通常说明：
-- `test_data_dir` 路径不对
-- CSV 太短，不满足 `base_window_size`
-- `sequence_length` 太大，切不出样本
-
-### 10.3 `ONNX export requires onnx package`
-
-说明导出依赖没装：
-
-```bash
-pip install -r requirements_k230_host.txt
+```json
+"uart_echo": {
+  "idle_sleep_ms": 1,
+  "log_every_n_packets": 20,
+  "print_hex": false
+}
 ```
 
-### 10.4 `nncase is not installed` 或编译失败
+运行：
 
-通常说明：
-- 当前 Python 环境不是你装 `nncase` 的那个环境
-- .NET Runtime 未安装完整
+```python
+cd /sdcard/raw_cnn_k230
+python run_k230_infer.py
+```
 
-### 10.5 板端能跑，但结果明显不对
+它会做什么：
 
-优先检查这 4 项是否三边一致：
-- `data.*`
-- `preprocessing.feature_mode`
-- `paths.kmodel/scaler_json`
-- PC 与板端是否用的是同一份测试数据
+- 不管收到的是不是合法帧。
+- 每次 `uart.read()` 读到一段 bytes，就直接 `uart.write()` 原样写回。
+- 不改任何字节。
 
-### 10.6 板端 UART 没数据
+预期日志：
+
+```text
+uart_echo_start
+uart_echo_cfg
+uart_echo_stat: packets=..., rx_bytes=..., tx_bytes=...
+```
+
+如果 `print_hex = true`，会打印每次收到的原始字节：
+
+```text
+uart_echo_packet: bytes=... hex=...
+```
+
+通过标准：
+
+- 上位机发什么，能收到完全一样的字节。
+- `rx_bytes` 和 `tx_bytes` 持续增加。
+- 不要求帧格式正确。
+
+如果这一步不通：
+
+- 说明双向链路还没通。
+- 查 RX/TX 是否接反。
+- 查上位机发送是否真的发出。
+- 查 K230 `uart.enabled` 是否为 `true`。
+- 查 `uart_id/tx_pin/rx_pin/baudrate`。
+
+### 5.3 第三步：`uart_frame_return`
+
+作用：
+
+- 测试 K230 是否能按协议正确收完整帧。
+- K230 每收到 N 帧，回传其中一帧。
+- 不加载模型。
+- 不做推理。
+
+适合验证：
+
+- 小帧格式是否正确。
+- 大帧格式是否正确。
+- 帧头帧尾是否对齐。
+- K230 是否能从字节流里拆出完整帧。
+
+配置：
+
+```json
+"runtime": {
+  "mode": "uart_frame_return",
+  "uart_frame_return": {
+    "return_every_n_frames": 1,
+    "idle_sleep_ms": 1,
+    "log_every_n_frames": 100,
+    "print_hex": false,
+    "strict_protocol": true,
+    "fixed_frame_len": 1044,
+    "return_inner_frame_when_outer_enabled": true,
+    "return_inner_frame_index": -1
+  }
+}
+```
+
+当前板端大帧配置：
+
+```json
+"uart": {
+  "header": [85, 170],
+  "tail": [252, 207],
+  "outer_frame_enabled": true,
+  "outer_frame_count": 20,
+  "outer_header": [247, 127],
+  "outer_tail": [250, 175]
+}
+```
+
+小帧格式：
+
+```text
+55 AA + 12 * int32 + FC CF
+```
+
+小帧长度：
+
+```text
+52 bytes
+```
+
+大帧格式：
+
+```text
+F7 7F + 20 个小帧 + FA AF
+```
+
+大帧长度：
+
+```text
+2 + 20 * 52 + 2 = 1044 bytes
+```
+
+运行：
+
+```python
+cd /sdcard/raw_cnn_k230
+python run_k230_infer.py
+```
+
+它会做什么：
+
+- 如果 `strict_protocol = true`，按帧头帧尾解析。
+- 如果 `outer_frame_enabled = true`，先找完整大帧，再检查大帧里的 20 个小帧。
+- 每收到 `return_every_n_frames` 个完整大帧，就回传一帧。
+- 当前 `return_inner_frame_when_outer_enabled = true`，所以收到大帧后回传其中一个小帧。
+- `return_inner_frame_index = -1` 表示回传大帧里的最后一个小帧。
+
+预期日志：
+
+```text
+uart_frame_return_start
+uart_frame_return_cfg
+uart_frame_return_outer_frame_cfg
+uart_frame_return_hit: rx_frame_idx=..., tx_frames=..., rx_bytes=..., tx_bytes=...
+```
+
+通过标准：
+
+- 上位机持续发大帧。
+- K230 的 `rx_frame_idx` 持续增加。
+- 上位机能收到 K230 回传的小帧。
+- 回传小帧内容能和上位机发送的大帧中某个小帧对上。
+
+如果这一步不通：
+
+- 如果 `rx_bytes` 增加但 `rx_frame_idx` 不增加，说明字节到了，但协议解析失败。
+- 查大帧头是否是 `F7 7F`。
+- 查大帧尾是否是 `FA AF`。
+- 查每个小帧头是否是 `55 AA`。
+- 查每个小帧尾是否是 `FC CF`。
+- 查大帧里是否刚好 20 个小帧。
+- 查上位机发送字节长度是否是 1044。
+
+什么时候用 `strict_protocol = false`：
+
+- 只想按固定长度切包，不想检查帧头帧尾。
+- 排查帧头帧尾不确定的问题。
+
+一般正式联调用 `strict_protocol = true`。
+
+### 5.4 第四步：`uart_debug_ack`
+
+作用：
+
+- K230 每收到 1 个完整大帧，就立即回 1 个 ACK 小帧。
+- 不加载模型。
+- 不做推理。
+- 用来确认大帧到达频率、计数、回传时序。
+
+和 `uart_frame_return` 的区别：
+
+- `uart_frame_return` 回传收到的原始帧内容。
+- `uart_debug_ack` 回传 K230 自己生成的调试 ACK，里面带计数和时间戳。
+
+配置：
+
+```json
+"runtime": {
+  "mode": "uart_debug_ack",
+  "uart_debug_ack": {
+    "idle_sleep_ms": 1,
+    "log_every_n_frames": 20,
+    "print_hex": false,
+    "strict_protocol": true,
+    "fixed_frame_len": 1044,
+    "flush_rx_on_start": true,
+    "startup_flush_empty_rounds": 3,
+    "startup_flush_sleep_ms": 10,
+    "ack_magic": 9001
+  }
+}
+```
+
+运行：
+
+```python
+cd /sdcard/raw_cnn_k230
+python run_k230_infer.py
+```
+
+ACK 小帧内容是 12 个 int32：
+
+```text
+[0] ack_magic，默认 9001
+[1] ack_seq，ACK 序号，从 1 递增
+[2] board_ticks_ms，板端毫秒时间
+[3] rx_outer_frame_idx，收到的完整大帧序号
+[4] rx_small_frame_idx，折算后的小帧序号
+[5] total_rx_bytes，累计接收字节数
+[6] len(frame)，本次完整帧长度，当前大帧应为 1044
+[7] 固定 1，表示成功收到完整帧
+[8] 预留
+[9] 预留
+[10] 预留
+[11] 预留
+```
+
+ACK 帧仍然按普通小帧格式发回：
+
+```text
+55 AA + 12 * int32 + FC CF
+```
+
+预期日志：
+
+```text
+uart_debug_ack_start
+uart_debug_ack_cfg
+uart_debug_ack_outer_frame_cfg
+uart_debug_ack_startup_flush
+uart_debug_ack_stat: rx_outer_frames=..., rx_small_frames=..., tx_ack_frames=..., rx_bytes=..., ack_seq=...
+```
+
+通过标准：
+
+- 上位机每发 1 个完整大帧，能收到 1 个 ACK 小帧。
+- ACK 第 1 个值是 `9001`。
+- ACK 第 2 个值连续递增。
+- ACK 第 7 个值是 `1044`。
+- ACK 频率和上位机发大帧频率一致。
+
+如果这一步不通：
+
+- 如果没有 ACK，但 `uart_frame_return` 正常，查 ACK 解码方式。
+- 如果 ACK 序号跳变，查上位机发包是否丢包。
+- 如果 `len(frame)` 不是 1044，查大帧长度。
+- 如果启动后先出现异常 ACK，保留 `flush_rx_on_start = true` 清空旧缓存。
+
+### 5.5 第五步：`uart_online`
+
+作用：
+
+- 正式在线推理模式。
+- 从 UART 接收实时 12 路数据。
+- 按窗口参数缓存数据。
+- 满足模型输入长度后运行 kmodel。
+- 把 12 路预测值按串口协议发回。
+
+配置：
+
+```json
+"runtime": {
+  "mode": "uart_online",
+  "uart_online": {
+    "channel_count": 12,
+    "infer_step_frames": 200,
+    "input_value_type": "int32",
+    "input_byte_order": "big",
+    "idle_sleep_ms": 1,
+    "log_every_n_frames": 200,
+    "send_zeros_before_ready": false,
+    "debug_predict_trace": true,
+    "debug_outer_rx": true,
+    "flush_rx_on_start": true
+  }
+}
+```
+
+运行：
+
+```python
+cd /sdcard/raw_cnn_k230
+python run_k230_infer.py
+```
+
+它会做什么：
+
+1. 加载 `kmodel`。
+2. 加载 `scaler_json`。
+3. 初始化 UART。
+4. 解析上位机发来的小帧或大帧。
+5. 每个小帧得到 12 路原始值。
+6. 每一路单独维护长度为 `base_window_size` 的滑动窗口。
+7. 每隔 `base_step` 生成一个基础窗口。
+8. CNN-TCN 会继续收集 `sequence_length` 个基础窗口。
+9. 满足 `sequence_step` 后推理一次。
+10. 每次推理输出 12 路预测值并回传。
+
+当前 CNN-TCN 数据参数：
+
+```json
+"data": {
+  "base_window_size": 500,
+  "base_step": 200,
+  "sequence_length": 5,
+  "sequence_step": 1
+}
+```
+
+含义：
+
+- 每一路先攒满 500 帧原始数据。
+- 之后每 200 帧生成一个基础窗口。
+- CNN-TCN 需要连续 5 个基础窗口。
+- 所以第一次正式推理需要大约：
+
+```text
+500 + 200 * (5 - 1) = 1300 个小帧
+```
+
+当前大帧每个包含 20 个小帧，所以第一次推理大约需要：
+
+```text
+1300 / 20 = 65 个大帧
+```
+
+之后每 `base_step = 200` 个小帧推理一次，也就是大约每：
+
+```text
+200 / 20 = 10 个大帧
+```
+
+回传格式：
+
+```text
+55 AA + 12 * int32 + FC CF
+```
+
+其中预测值会按：
+
+```json
+"predict_scale": 10000
+```
+
+放大后转成 int32。
+
+例如预测 `0.1234`，回传整数约为：
+
+```text
+1234
+```
+
+预期日志：
+
+```text
+uart_online_start
+uart_online_cfg
+uart_online_feature_mode
+uart_online_outer_frame_cfg
+uart_online_startup_flush
+uart_online_outer_rx
+uart_online_trigger
+uart_online_result
+uart_online_tx
+```
+
+关键日志含义：
+
+- `uart_online_outer_rx`：K230 收到了大帧并拆出小帧。
+- `uart_online_trigger`：缓存已经满足条件，准备推理。
+- `uart_online_result`：已经完成一次 kmodel 推理。
+- `uart_online_tx`：已经把预测结果发回上位机。
+
+通过标准：
+
+- `uart_online_outer_rx` 持续出现，说明接收正常。
+- 第一次缓存满后出现 `uart_online_trigger`。
+- 随后出现 `uart_online_result`。
+- 上位机能收到 52 字节结果小帧。
+- 结果小帧能按 `predict_scale = 10000` 还原成浮点预测值。
+
+如果这一步不通：
+
+- 有 `outer_rx` 但没有 `trigger`：说明帧收到了，但还没攒够 1300 个小帧，继续等。
+- 长时间没有 `outer_rx`：说明协议解析失败或串口没收到。
+- 有 `trigger` 但没有 `result`：重点查 kmodel/scaler 是否正确。
+- 有 `result` 但上位机收不到：查 K230 TX、上位机 RX、返回帧解析。
+- 结果全是 0：查 `send_zeros_before_ready`，或者确认是否还没到第一次推理。
+
+### 5.6 各模式功能对比
+
+| 模式 | 是否需要上位机发数据 | 是否解析协议 | 是否加载模型 | 是否推理 | 回传内容 | 用途 |
+|---|---|---|---|---|---|---|
+| `uart_continuous_send_test.py` | 否 | 否 | 否 | 否 | 固定测试小帧 | 测 K230 发送和上位机接收 |
+| `uart_echo` | 是 | 否 | 否 | 否 | 收到什么回什么 | 测双向串口链路 |
+| `uart_frame_return` | 是 | 是 | 否 | 否 | 原始帧或大帧里的小帧 | 测帧格式和大小帧解析 |
+| `uart_debug_ack` | 是 | 是 | 否 | 否 | ACK 小帧 | 测大帧到达频率和回传时序 |
+| `uart_online` | 是 | 是 | 是 | 是 | 12 路预测值 | 正式在线推理 |
+
+### 5.7 当前协议速查
+
+小帧：
+
+```text
+55 AA + 12 * int32(big-endian) + FC CF
+```
+
+小帧长度：
+
+```text
+52 bytes
+```
+
+大帧：
+
+```text
+F7 7F + 20 * 小帧 + FA AF
+```
+
+大帧长度：
+
+```text
+1044 bytes
+```
+
+输入：
+
+```json
+"input_value_type": "int32",
+"input_byte_order": "big"
+```
+
+输出：
+
+```json
+"value_type": "int32",
+"byte_order": "big",
+"predict_scale": 10000
+```
+
+### 5.8 推荐排查路径
+
+如果串口不通：
+
+```text
+uart_continuous_send_test.py -> uart_echo -> uart_frame_return -> uart_debug_ack -> uart_online
+```
+
+如果能收到但模型不出结果：
+
+```text
+uart_frame_return -> uart_debug_ack -> uart_online
+```
+
+如果离线 CSV 正常但在线结果不正常：
+
+```text
+重点查 input_value_type、input_byte_order、predict_scale、帧长度、大小帧数量
+```
+
+如果在线很久没有第一次结果：
+
+```text
+确认是否已经收到至少 1300 个小帧，当前等价于约 65 个大帧
+```
+
+## 6. 常见问题排查
+
+### 6.1 `load_state_dict` 报错
+
+通常是 `.pth` 和配置里的模型结构不匹配。
 
 检查：
-- `uart.enabled`
-- `uart_id`
-- `tx_pin/rx_pin`
-- `baudrate`
-- 上位机帧格式是否和 `header/tail/value_type/byte_order/value_count` 一致
 
-### 10.7 明明直接点运行，为什么数量不对
+- `model.type`
+- `cnn_tcn_conv_filters`
+- `cnn_tcn_kernel_size`
+- `cnn_tcn_pool_size`
+- `cnn_tcn_num_channels`
+- `cnn_tcn_tcn_kernel_size`
+- `cnn_tcn_dilations`
+- `sequence_length`
 
-先检查：
-- PC 侧：`raw_cnn_pc/infer_config.json` 的 `runtime.max_samples`
-- K230 侧：`raw_cnn_k230/k230_config.json` 的 `runtime.compare_max_samples`
+### 6.2 `No valid samples`
 
-很多时候不是脚本有问题，而是配置文件里的值还停留在之前联调用的数量。
+通常是数据切不出样本。
 
-## 11. 最短执行版
+检查：
 
-如果你只是换了一个新的 `.pth/.pkl`，并且网络结构没变，最短流程就是：
+- `test_data_dir` 是否对。
+- CSV 是否足够长。
+- `base_window_size` 是否太大。
+- `sequence_length` 是否太大。
+- `base_step` / `sequence_step` 是否导致切不出序列。
 
-1. 把新 `.pth/.pkl` 放进 `raw_cnn_pc/model/`
-2. 改 `raw_cnn_pc/infer_config.json` 里的 `weights_path/scaler_path`
-3. 按需要改 `raw_cnn_pc/infer_config.json` 里的 `runtime.max_samples`
-4. 改 `raw_cnn_pc/k230_export_config.json` 里的 `weights_pth/scaler_pkl`
-5. 按需要改 `raw_cnn_k230/k230_config.json` 里的 `runtime.compare_max_samples`
-6. 跑：
+### 6.3 `nncase is not installed`
 
-```bash
+通常是 Python 环境不对。
+
+建议在 PC 端使用项目虚拟环境：
+
+```powershell
 cd raw_cnn_pc
-python infer.py --config infer_config.json --output predictions_pc_quick.csv
-python build_kmodel.py --config k230_export_config.json
+..\.venv\Scripts\python.exe build_kmodel.py
 ```
 
-7. 如果导出的 `kmodel/json` 文件名变了，再改 `raw_cnn_k230/k230_config.json` 的 `paths.kmodel/scaler_json`
-8. 把 `raw_cnn_k230/` 拷到板端
-9. 板端跑：
+如果还缺依赖，安装：
 
-```python
-python run_k230_csv_compare.py
+```powershell
+pip install -r requirements_k230_host.txt
 ```
 
-或：
+### 6.4 kmodel 结果明显不对
 
-```python
-python run_k230_infer.py
+优先检查三边一致性：
+
+- PC 推理配置里的 `data.*`
+- PC 导出配置里的 `data.*`
+- 板端配置里的 `data.*`
+- `feature_mode`
+- `scaler.pkl` 和 `scaler_json` 是否配套。
+- `kmodel` 和 `scaler_json` 是否同一次导出。
+
+如果出现固定大输出，例如大量样本都输出 `9.3671875`：
+
+- 优先把 `calibrate_method` 从 `NoClip` 改成 `Kld`。
+- 其次试 `quant_type = int16`、`weight_quant_type = uint8`。
+- 再重新生成 kmodel 并跑 PC 对比。
+
+### 6.5 板端输出文件分不清
+
+现在板端输出 CSV 会自动追加 kmodel 文件名。
+
+例如配置里写：
+
+```json
+"predictions_csv": "predictions_cnn_tcn.csv"
 ```
 
-照这个顺序做，一般不会乱。
+如果当前 kmodel 是：
+
+```text
+cnn_tcn_20260415_074057_i16u8_kld512.kmodel
+```
+
+实际输出会带上：
+
+```text
+predictions_cnn_tcn__cnn_tcn_20260415_074057_i16u8_kld512.csv
+```
+
+## 7. 最短执行版
+
+如果只是换了 CNN-TCN 新 `.pth/.pkl`，结构没变，最短按下面做：
+
+1. 把新 `.pth/.pkl` 放到 `raw_cnn_pc/model/cnn-tcn/你的模型目录/`。
+2. 改 `raw_cnn_pc/configs/infer/infer_config_cnn_tcn.json` 的 `weights_path` 和 `scaler_path`。
+3. 改 `raw_cnn_pc/configs/export/k230_export_config_cnn_tcn.json` 的 `weights_pth` 和 `scaler_pkl`。
+4. 改导出文件名：`onnx/kmodel/scaler_json/calibration_npy/nncase_dump_dir`。
+5. 量化方案优先用 `int16 + uint8 + Kld`。
+6. 运行 `cd raw_cnn_pc`。
+7. 运行 `..\.venv\Scripts\python.exe build_kmodel.py`。
+8. 运行 PC 对比脚本确认 kmodel 不离谱。
+9. 改 `raw_cnn_k230/configs/k230_config_cnn_tcn.json` 的 `paths.kmodel` 和 `paths.scaler_json`。
+10. 把 `kmodel/scaler_json/config` 拷到板端。
+11. 离线测：`runtime.mode = "csv_cached"`，运行 `python run_k230_infer.py`。
+12. 在线测：`runtime.mode = "uart_online"`，运行 `python run_k230_infer.py`。
+
+## 8. 当前 074057 可上板配置
+
+当前 PC 导出配置已经指向：
+
+```text
+raw_cnn_pc/model/cnn-tcn/train_model_bundle_cnn_tcn_20260415_074057/cnn_tcn.pth
+raw_cnn_pc/model/cnn-tcn/train_model_bundle_cnn_tcn_20260415_074057/scaler.pkl
+```
+
+当前板端配置已经指向：
+
+```json
+"paths": {
+  "kmodel": "model/cnn_tcn_20260415_074057_i16u8_kld512.kmodel",
+  "scaler_json": "model/scaler_cnn_tcn_20260415_074057_i16u8_kld512.json",
+  "test_data_dir": "data/880k_data_260414",
+  "predictions_csv": "predictions_cnn_tcn_k230_20260415_074057_i16u8_kld512.csv"
+}
+```
+
+所以上板前确认板子上有：
+
+```text
+/sdcard/raw_cnn_k230/model/cnn_tcn_20260415_074057_i16u8_kld512.kmodel
+/sdcard/raw_cnn_k230/model/scaler_cnn_tcn_20260415_074057_i16u8_kld512.json
+```
+
+如果是离线 CSV 测试，再确认：
+
+```text
+/sdcard/raw_cnn_k230/data/880k_data_260414/
+```

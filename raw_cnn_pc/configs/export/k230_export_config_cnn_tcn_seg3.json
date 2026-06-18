@@ -1,0 +1,68 @@
+{
+  "name": "raw_cnn_k230_export_cnn_tcn_seg3_soft_stats_moe_20260423_084149_u8u8_noclip512",
+  "paths": {
+    "weights_pth": "model/cnn-tcn-seg3/cnn_tcn_seg3_soft_stats_moe_20260423_084149.pth",
+    "onnx": "../raw_cnn_k230/model/cnn-tcn-seg3/cnn_tcn_seg3_soft_stats_moe_20260423_084149_u8u8_noclip512.onnx",
+    "kmodel": "../raw_cnn_k230/model/cnn-tcn-seg3/cnn_tcn_seg3_soft_stats_moe_20260423_084149_u8u8_noclip512.kmodel",
+    "scaler_pkl": "model/cnn-tcn-seg3/scaler_20260423_084149.pkl",
+    "scaler_json": "../raw_cnn_k230/model/cnn-tcn-seg3/scaler_cnn_tcn_seg3_soft_stats_moe_20260423_084149_u8u8_noclip512.json",
+    "calibration_npy": "../raw_cnn_k230/model/cnn-tcn-seg3/cnn_tcn_seg3_soft_stats_moe_20260423_084149_u8u8_noclip512_calibration_input.npy",
+    "calibration_data_dir": "../data/new_data",
+    "test_data_dir": "../data/new_data",
+    "predictions_csv": "../raw_cnn_k230/predictions_cnn_tcn_seg3_k230_20260423_084149_u8u8_noclip512.csv",
+    "nncase_dump_dir": "../raw_cnn_k230/model/cnn-tcn-seg3/nncase_dump_cnn_tcn_seg3_soft_stats_moe_20260423_084149_u8u8_noclip512"
+  },
+  "data": {
+    "base_window_size": 500,
+    "base_step": 200,
+    "sequence_length": 5,
+    "sequence_step": 1
+  },
+  "preprocessing": {
+    "feature_mode": "window_demean",
+    "filter_type": "none"
+  },
+  "model": {
+    "type": "CNN-TCN-Seg3-Soft-Stats-MoE",
+    "raw_window_aux_enabled": true,
+    "raw_window_aux_source": "x_raw_window",
+    "cnn_tcn_seg3_soft_stats_moe_conv_filters": [
+      16,
+      24
+    ],
+    "cnn_tcn_seg3_soft_stats_moe_kernel_size": [
+      5,
+      3
+    ],
+    "cnn_tcn_seg3_soft_stats_moe_pool_size": [
+      2,
+      2
+    ],
+    "cnn_tcn_seg3_soft_stats_moe_num_channels": [
+      16
+    ],
+    "cnn_tcn_seg3_soft_stats_moe_tcn_kernel_size": 3,
+    "cnn_tcn_seg3_soft_stats_moe_dilations": [
+      1
+    ],
+    "cnn_tcn_seg3_soft_stats_moe_dropout": 0.0,
+    "cnn_tcn_seg3_soft_stats_moe_stats_hidden_dim": 16,
+    "cnn_tcn_seg3_soft_stats_moe_router_hidden_dim": 24,
+    "cnn_tcn_seg3_soft_stats_moe_expert_hidden_dim": 32,
+    "cnn_tcn_seg3_soft_stats_moe_route_temperature": 1.0,
+    "cnn_tcn_seg3_soft_stats_moe_min_value": 0.0,
+    "cnn_tcn_seg3_soft_stats_moe_max_value": 1.5,
+    "cnn_tcn_seg3_soft_stats_moe_low_expert_upper": 0.4,
+    "cnn_tcn_seg3_soft_stats_moe_mid_expert_lower": 0.2,
+    "cnn_tcn_seg3_soft_stats_moe_mid_expert_upper": 1.0,
+    "cnn_tcn_seg3_soft_stats_moe_high_expert_lower": 0.8
+  },
+  "quantization": {
+    "samples_count": 512,
+    "sampling_strategy": "per_dryness_uniform",
+    "random_seed": 20260414,
+    "quant_type": "uint8",
+    "weight_quant_type": "uint8",
+    "calibrate_method": "NoClip"
+  }
+}

@@ -1,0 +1,220 @@
+{
+  "artifact_version": 2,
+  "created_at": "2026-05-05 10:35:44",
+  "active_model": "CNN-TCN",
+  "model_type": "CNN-TCN",
+  "legacy_model_kwargs": {
+    "hidden_units": [
+      64,
+      32
+    ],
+    "mlp_activation": [
+      "relu",
+      "tanh"
+    ],
+    "bp_hidden_units": [
+      16,
+      32
+    ],
+    "bp_activation": [
+      "sigmoid"
+    ],
+    "bp_output_activation": "none",
+    "cnn_lstm_conv_filters": [
+      16,
+      32
+    ],
+    "cnn_lstm_kernel_size": 3,
+    "cnn_lstm_pool_size": 2,
+    "cnn_lstm_units": 20,
+    "cnn_tcn_conv_filters": [
+      16,
+      32
+    ],
+    "cnn_tcn_kernel_size": [
+      5,
+      3
+    ],
+    "cnn_tcn_pool_size": [
+      2,
+      2
+    ],
+    "cnn_tcn_num_channels": [
+      16,
+      32
+    ],
+    "cnn_tcn_tcn_kernel_size": 3,
+    "cnn_tcn_dilations": [
+      1,
+      2
+    ],
+    "cnn_tcn_dropout": 0.0,
+    "cnn_tcn_seg3_soft_stats_moe_avg_pool_size": 1,
+    "cnn_tcn_seg3_soft_stats_moe_avg_pool_stride": 1,
+    "cnn_tcn_seg3_soft_stats_moe_conv_filters": [
+      16,
+      24
+    ],
+    "cnn_tcn_seg3_soft_stats_moe_kernel_size": [
+      5,
+      3
+    ],
+    "cnn_tcn_seg3_soft_stats_moe_pool_size": [
+      2,
+      2
+    ],
+    "cnn_tcn_seg3_soft_stats_moe_num_channels": [
+      16
+    ],
+    "cnn_tcn_seg3_soft_stats_moe_tcn_kernel_size": 3,
+    "cnn_tcn_seg3_soft_stats_moe_dilations": [
+      1
+    ],
+    "cnn_tcn_seg3_soft_stats_moe_dropout": 0.0,
+    "cnn_tcn_seg3_soft_stats_moe_stats_hidden_dim": 16,
+    "cnn_tcn_seg3_soft_stats_moe_low_threshold": 0.3,
+    "cnn_tcn_seg3_soft_stats_moe_high_threshold": 0.9,
+    "cnn_tcn_seg3_soft_stats_moe_min_value": 0.0,
+    "cnn_tcn_seg3_soft_stats_moe_max_value": 1.5,
+    "cnn_tcn_seg3_soft_stats_moe_reg_loss": "SmoothL1",
+    "cnn_tcn_seg3_soft_stats_moe_reg_beta": 1.0,
+    "cnn_tcn_seg3_soft_stats_moe_mid_weight": 1.0,
+    "cnn_tcn_seg3_soft_stats_moe_low_weight": 2.0,
+    "cnn_tcn_seg3_soft_stats_moe_high_weight": 3.0,
+    "cnn_tcn_seg3_soft_stats_moe_route_loss_weight": 0.3,
+    "cnn_tcn_seg3_soft_stats_moe_expert_loss_weight": 0.5,
+    "cnn_tcn_seg3_soft_stats_moe_route_class_weights": [
+      1.0,
+      1.0,
+      1.5
+    ],
+    "cnn_tcn_seg3_soft_stats_moe_route_temperature": 1.0,
+    "cnn_tcn_seg3_soft_stats_moe_router_hidden_dim": 24,
+    "cnn_tcn_seg3_soft_stats_moe_expert_hidden_dim": 32,
+    "cnn_tcn_seg3_soft_stats_moe_balance_loss_weight": 0.05,
+    "cnn_tcn_seg3_soft_stats_moe_low_expert_upper": 0.4,
+    "cnn_tcn_seg3_soft_stats_moe_mid_expert_lower": 0.2,
+    "cnn_tcn_seg3_soft_stats_moe_mid_expert_upper": 1.0,
+    "cnn_tcn_seg3_soft_stats_moe_high_expert_lower": 0.8,
+    "outer_fusion_model_path_1": "",
+    "outer_fusion_model_path_2": "",
+    "outer_fusion_model_path_3": "",
+    "outer_fusion_gate_hidden_dim": 16,
+    "outer_fusion_gate_activation": "relu",
+    "outer_fusion_use_saved_scalers": true,
+    "lstm_hidden_size": 64,
+    "lstm_num_layers": 1,
+    "lstm_dropout": 0.0,
+    "lstm_bidirectional": false,
+    "rnn_hidden_size": 64,
+    "rnn_num_layers": 1,
+    "rnn_nonlinearity": "tanh",
+    "rnn_dropout": 0.0,
+    "rnn_bidirectional": false,
+    "tcn_num_channels": [
+      64,
+      64
+    ],
+    "tcn_kernel_size": 3,
+    "tcn_dilations": null,
+    "tcn_dropout": 0.0,
+    "svr_kernel": "rbf",
+    "svr_C": 1.0,
+    "svr_gamma": "scale",
+    "svr_epsilon": 0.1,
+    "cnn_conv_filters": [
+      16,
+      32
+    ],
+    "cnn_kernel_size": 3,
+    "cnn_pool_size": 2,
+    "cnn2d_conv_filters": [
+      16,
+      16
+    ],
+    "cnn2d_kernel_size": [
+      3,
+      3
+    ],
+    "cnn2d_pool_size": 2,
+    "cnn2d_use_gap": true
+  },
+  "runtime": {
+    "feat_mode": "Window Demean",
+    "base_window_size": 500,
+    "base_step": 200,
+    "seq_length": 5,
+    "seq_step": 1,
+    "norm_method": "StandardScaler",
+    "filter_type": "Causal Extreme Spike Filter",
+    "aux_enabled": false,
+    "aux_dim": 0,
+    "aux_names": [
+      "温度"
+    ],
+    "raw_window_aux_enabled": false,
+    "raw_window_aux_source": null,
+    "data_folder": "data/新训练数据 - 去高干度/",
+    "scaler_path": "outputs/models/scaler_20260505_103801.pkl",
+    "quant_aware": {
+      "enabled": false,
+      "warmup_epochs": 30,
+      "mode": "full",
+      "act_bits": 8,
+      "weight_bits": 8
+    }
+  },
+  "active_model_config": {
+    "cnn_tcn": {
+      "cnn": {
+        "conv_filters": [
+          16,
+          32
+        ],
+        "kernel_size": [
+          5,
+          3
+        ],
+        "pool_size": [
+          2,
+          2
+        ]
+      },
+      "tcn": {
+        "num_channels": [
+          16,
+          32
+        ],
+        "kernel_size": 3,
+        "dilations": [
+          1,
+          2
+        ],
+        "dropout": 0.0
+      }
+    }
+  },
+  "feat_mode": "Window Demean",
+  "base_window_size": 500,
+  "base_step": 200,
+  "seq_length": 5,
+  "seq_step": 1,
+  "norm_method": "StandardScaler",
+  "filter_type": "Causal Extreme Spike Filter",
+  "aux_enabled": false,
+  "aux_dim": 0,
+  "aux_names": [
+    "温度"
+  ],
+  "raw_window_aux_enabled": false,
+  "raw_window_aux_source": null,
+  "data_folder": "data/新训练数据 - 去高干度/",
+  "scaler_path": "outputs/models/scaler_20260505_103801.pkl",
+  "quant_aware": {
+    "enabled": false,
+    "warmup_epochs": 30,
+    "mode": "full",
+    "act_bits": 8,
+    "weight_bits": 8
+  }
+}

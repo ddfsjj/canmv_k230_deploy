@@ -1,0 +1,51 @@
+{
+  "name": "raw_cnn_k230_export_cnn_lstm_20260423_093940",
+  "paths": {
+    "weights_pth": "../raw_cnn_k230/model/cnn-lstm/cnn_lstm_20260423_093940.pth",
+    "onnx": "../raw_cnn_k230/model/cnn-lstm/cnn_lstm_20260423_093940.onnx",
+    "kmodel": "../raw_cnn_k230/model/cnn-lstm/cnn_lstm_20260423_093940.kmodel",
+    "scaler_pkl": "../raw_cnn_k230/model/cnn-lstm/scaler_20260423_093940.pkl",
+    "scaler_json": "../raw_cnn_k230/model/cnn-lstm/scaler_20260423_093940.json",
+    "calibration_npy": "../raw_cnn_k230/model/cnn-lstm/cnn_lstm_20260423_093940_calibration_input.npy",
+    "calibration_data_dir": "data/880k_data_260414",
+    "test_data_dir": "data/880k_data_260414",
+    "predictions_csv": "../raw_cnn_k230/predictions_cnn_lstm_20260423_093940.csv",
+    "nncase_dump_dir": "../raw_cnn_k230/model/cnn-lstm/nncase_dump_cnn_lstm_20260423_093940"
+  },
+  "data": {
+    "base_window_size": 500,
+    "base_step": 200,
+    "sequence_length": 5,
+    "sequence_step": 1
+  },
+  "preprocessing": {
+    "feature_mode": "window_demean",
+    "filter_type": "none"
+  },
+  "model": {
+    "type": "CNN-LSTM",
+    "cnn_lstm_conv_filters": [
+      16,
+      32
+    ],
+    "cnn_lstm_kernel_size": 3,
+    "cnn_lstm_pool_size": 2,
+    "cnn_lstm_units": 20,
+    "lstm_hidden_size": 20,
+    "lstm_num_layers": 1,
+    "lstm_dropout": 0.0,
+    "lstm_bidirectional": false
+  },
+  "quantization": {
+    "samples_count": 256,
+    "sampling_strategy": "first",
+    "random_seed": 20260423,
+    "quant_type": "int8",
+    "weight_quant_type": "int8",
+    "calibrate_method": "Kld"
+  },
+  "debug": {
+    "dump_ir": true,
+    "dump_asm": false
+  }
+}

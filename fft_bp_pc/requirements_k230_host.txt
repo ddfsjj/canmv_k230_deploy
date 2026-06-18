@@ -1,6 +1,0 @@
-numpy==1.26.4
-joblib==1.4.2
-torch==2.5.1
-onnx>=1.16.0
-nncase==2.11.0
-https://github.com/kendryte/nncase/releases/download/v2.11.0/nncase_kpu-2.11.0-py2.py3-none-win_amd64.whl

@@ -1,23 +1,10 @@
 import sys
-import time
 
 APP_DIR = "/sdcard/raw_cnn_k230"
+
+# 中文注释：外层 main.py 只负责把项目目录加入模块路径，
+# 真正的单模型/多模型选择逻辑都放到项目目录里的 main.py。
 if APP_DIR not in sys.path:
     sys.path.insert(0, APP_DIR)
 
-
-def run_once():
-    import run_k230_infer as infer_app
-
-    infer_app.main()
-
-
-while True:
-    try:
-        run_once()
-    except Exception as exc:
-        print("UART auto-start error:", exc)
-        if hasattr(time, "sleep_ms"):
-            time.sleep_ms(1000)
-        else:
-            time.sleep(1)
+import main

@@ -1,0 +1,58 @@
+{
+  "name": "raw_cnn_pc_cnn_tcn_seg3_soft_stats_moe",
+  "data": {
+    "test_data_dir": "../data/new_data",
+    "base_window_size": 500,
+    "base_step": 200,
+    "sequence_length": 5,
+    "sequence_step": 1
+  },
+  "preprocessing": {
+    "feature_mode": "window_demean",
+    "filter_type": "none"
+  },
+  "model": {
+    "type": "CNN-TCN-Seg3-Soft-Stats-MoE",
+    "raw_window_aux_enabled": true,
+    "raw_window_aux_source": "x_raw_window",
+    "cnn_tcn_seg3_soft_stats_moe_conv_filters": [
+      16,
+      24
+    ],
+    "cnn_tcn_seg3_soft_stats_moe_kernel_size": [
+      5,
+      3
+    ],
+    "cnn_tcn_seg3_soft_stats_moe_pool_size": [
+      2,
+      2
+    ],
+    "cnn_tcn_seg3_soft_stats_moe_num_channels": [
+      16
+    ],
+    "cnn_tcn_seg3_soft_stats_moe_tcn_kernel_size": 3,
+    "cnn_tcn_seg3_soft_stats_moe_dilations": [
+      1
+    ],
+    "cnn_tcn_seg3_soft_stats_moe_dropout": 0.0,
+    "cnn_tcn_seg3_soft_stats_moe_stats_hidden_dim": 16,
+    "cnn_tcn_seg3_soft_stats_moe_router_hidden_dim": 24,
+    "cnn_tcn_seg3_soft_stats_moe_expert_hidden_dim": 32,
+    "cnn_tcn_seg3_soft_stats_moe_route_temperature": 1.0,
+    "cnn_tcn_seg3_soft_stats_moe_min_value": 0.0,
+    "cnn_tcn_seg3_soft_stats_moe_max_value": 1.5,
+    "cnn_tcn_seg3_soft_stats_moe_low_expert_upper": 0.4,
+    "cnn_tcn_seg3_soft_stats_moe_mid_expert_lower": 0.2,
+    "cnn_tcn_seg3_soft_stats_moe_mid_expert_upper": 1.0,
+    "cnn_tcn_seg3_soft_stats_moe_high_expert_lower": 0.8,
+    "weights_path": "model/cnn-tcn-seg3/cnn_tcn_seg3_soft_stats_moe_20260423_084149.pth"
+  },
+  "normalization": {
+    "type": "StandardScaler",
+    "scaler_path": "model/cnn-tcn-seg3/scaler_20260423_084149.pkl"
+  },
+  "runtime": {
+    "device": "cpu",
+    "max_samples": null
+  }
+}

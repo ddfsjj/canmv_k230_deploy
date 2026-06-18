@@ -1,10 +1,10 @@
 """
-独立串口持续发送测试脚本。
+独立串口连续发包测试脚本。
 
 用途：
 1. 不依赖模型与 CSV，单独验证 UART 引脚、波特率和协议格式是否正确。
-2. 上位机或单片机可先用这个脚本确认“发送端”本身没有问题。
-3. 当前按固定协议持续发包：55 AA + 12 个 4 字节数值 + FC CF。
+2. 上位机或单片机可以先用它确认“发送端”本身没有问题。
+3. 当前按固定协议持续发包：`55 AA + 12 个 4 字节数值 + FC CF`。
 """
 
 from machine import UART, FPIOA
@@ -15,9 +15,10 @@ try:
 except ImportError:
     import struct
 
+
 # =========================
 # 串口物理层配置
-# 与单片机约定保持一致
+# 与单片机侧约定保持一致
 # =========================
 UART_ID_NUM = 2
 TX_PIN = 11
@@ -55,13 +56,12 @@ def _sleep_ms(ms):
 
 
 def _pack_u32_be(v):
-    # 4 字节无符号整型，大端序（高位在前）。
-    # 即十六进制显示顺序与人工阅读顺序一致。
+    # 4 字节无符号整型，大端序。
     return struct.pack(">I", int(v) & 0xFFFFFFFF)
 
 
 def _build_frame(values):
-    # 把输入值打成一整帧协议数据。
+    # 把输入值打包成一整帧协议数据。
     # 不足 12 路时自动补 0，保证帧长固定。
     frame = bytearray(FRAME_HEADER)
     for i in range(VALUE_COUNT):
@@ -79,7 +79,7 @@ def _bytes_to_hex(data):
 
 
 def _uart_consts():
-    # 把用户填写的整数/字符串配置转换成 machine.UART 所需常量。
+    # 把当前配置转换成 machine.UART 所需常量。
     uart_const = getattr(UART, "UART{}".format(UART_ID_NUM), UART_ID_NUM)
     bits_const = UART.SEVENBITS if int(BITS) == 7 else UART.EIGHTBITS
     parity_key = str(PARITY).lower()
@@ -95,7 +95,6 @@ def _uart_consts():
 
 def _setup_fpioa():
     # 将物理引脚映射为 UART 功能。
-    # 这里是 K230 上 UART2 的 TX/RX 复用关系。
     fpioa = FPIOA()
     tx_func = getattr(fpioa, "UART{}_TXD".format(UART_ID_NUM))
     rx_func = getattr(fpioa, "UART{}_RXD".format(UART_ID_NUM))
@@ -110,7 +109,7 @@ def _setup_fpioa():
 
 
 def main():
-    # 先完成引脚复用，再初始化 UART 外设。
+    # 这个入口刻意做得很小，方便直接拿它当“最小串口自检脚本”使用。
     _setup_fpioa()
     uart_const, bits_const, parity_const, stop_const = _uart_consts()
     uart = UART(
@@ -122,7 +121,7 @@ def main():
     )
 
     frame_len = len(FRAME_HEADER) + VALUE_COUNT * 4 + len(FRAME_TAIL)
-    print("UART持续发送测试开始")
+    print("UART 持续发送测试开始")
     print("UART{} {}bps TX={} RX={} 8N1".format(UART_ID_NUM, BAUDRATE, TX_PIN, RX_PIN))
     print("Frame header=55 AA, tail=FC CF, value_count={}, len={}".format(VALUE_COUNT, frame_len))
     print("按 Ctrl+C 停止")
@@ -131,9 +130,8 @@ def main():
     try:
         while True:
             # 当前测试包内容：
-            # 第 1 个数值：递增序号，便于确认包序是否连续。
-            # 第 2 个数值：毫秒计时，便于确认是否一直在发。
-            # 其余数值补 0，只占位，不代表业务数据。
+            # 第 1 个数值是递增序号，方便确认包序是否连续。
+            # 第 2 个数值是毫秒计时，方便确认链路是否一直在发。
             values = [seq, _now_ms()]
             frame = _build_frame(values)
             written = uart.write(frame)
@@ -150,7 +148,7 @@ def main():
             uart.deinit()
         except Exception:
             pass
-        print("UART已释放")
+        print("UART 已释放")
 
 
 if __name__ == "__main__":

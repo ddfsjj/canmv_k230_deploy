@@ -16,6 +16,10 @@ K230 侧运行主脚本。
 import gc
 import json
 import time
+try:
+    import sys  # type: ignore
+except ImportError:
+    sys = None  # type: ignore
 
 try:
     import uos as os  # type: ignore
@@ -43,6 +47,16 @@ if NP_FLOAT is None:
     NP_FLOAT = getattr(np, "float", None)
 if NP_FLOAT is None:
     NP_FLOAT = float
+
+# 大将军平时直接运行这个文件时，默认读取这里指定的板端配置。
+# 以后如果要切配置，直接改这一行即可。
+DEFAULT_RUNTIME_CONFIG_PATH = "configs/k230_config_cnn_tcn.json"
+OVERRIDE_CONFIG_PATH = None
+
+# 下面这一大段公共工具函数虽然看起来多，
+# 但核心目标只有两个：
+# 1. 让同一份脚本同时覆盖离线 CSV 和串口在线多模式。
+# 2. 尽量兼容 CanMV / MicroPython / 普通 Python 的运行差异。
 
 # 进程内缓存：
 # 1. 缓存离线模式构建好的样本与标准化结果。
@@ -118,6 +132,7 @@ class UartDrynessSender:
     def __init__(self, uart_cfg):
         self.enabled = False
         self.uart = None
+        self.quiet = bool(uart_cfg.get("quiet", False))
         self.send_count = 0
         self.error_count = 0
         self.pending_values = []
@@ -145,7 +160,8 @@ class UartDrynessSender:
         if not bool(uart_cfg.get("enabled", False)):
             return
         if UART is None or FPIOA is None:
-            print("WARN: machine UART/FPIOA not available, UART send disabled.")
+            if not self.quiet:
+                print("WARN: machine UART/FPIOA not available, UART send disabled.")
             return
         try:
             uart_id = int(uart_cfg.get("uart_id", 1))
@@ -193,23 +209,25 @@ class UartDrynessSender:
                 stop=stop_const,
             )
             self.enabled = True
-            print(
-                "UART sender enabled: UART{}, {} bps, tx_pin={}, rx_pin={}, value_count={}, byte_order={}, value_type={}, outer_frame_enabled={}, outer_frame_count={}".format(
-                    uart_id,
-                    baudrate,
-                    tx_pin,
-                    rx_pin,
-                    self.value_count,
-                    self.byte_order,
-                    self.value_type,
-                    self.outer_frame_enabled,
-                    self.outer_frame_count,
+            if not self.quiet:
+                print(
+                    "UART sender enabled: UART{}, {} bps, tx_pin={}, rx_pin={}, value_count={}, byte_order={}, value_type={}, outer_frame_enabled={}, outer_frame_count={}".format(
+                        uart_id,
+                        baudrate,
+                        tx_pin,
+                        rx_pin,
+                        self.value_count,
+                        self.byte_order,
+                        self.value_type,
+                        self.outer_frame_enabled,
+                        self.outer_frame_count,
+                    )
                 )
-            )
         except Exception as exc:
             self.enabled = False
             self.uart = None
-            print("WARN: UART sender init failed, UART send disabled:", exc)
+            if not self.quiet:
+                print("WARN: UART sender init failed, UART send disabled:", exc)
 
     def _parse_frame_bytes(self, raw, default_bytes):
         # 兼容多种配置写法：
@@ -290,7 +308,8 @@ class UartDrynessSender:
             self.send_count += 1
         except Exception as exc:
             self.error_count += 1
-            print("WARN: UART send failed:", exc)
+            if not self.quiet:
+                print("WARN: UART send failed:", exc)
 
     def send_raw_int_values_frame(self, values):
         # 调试 ACK 模式下直接发送原始整数，不再乘 predict_scale。
@@ -302,7 +321,8 @@ class UartDrynessSender:
             self.send_count += 1
         except Exception as exc:
             self.error_count += 1
-            print("WARN: UART raw-int send failed:", exc)
+            if not self.quiet:
+                print("WARN: UART raw-int send failed:", exc)
 
     def send_values_frame(self, values):
         # 适用于“已经拿到 12 路完整结果”的场景，例如在线模式。
@@ -369,8 +389,10 @@ def drain_uart_rx(uart, empty_rounds=3, sleep_between_ms=10):
             empty_hits = 0
         else:
             empty_hits += 1
-            if sleep_v > 0:
-                sleep_ms(sleep_v)
+            # 中文注释：下位机持续发数时，这里睡眠会让新数据趁机进缓冲，
+            # 导致启动清空阶段很难连续读到空缓冲；保留快速空读即可。
+            # if sleep_v > 0:
+            #     sleep_ms(sleep_v)
     return total_bytes
 
 
@@ -789,6 +811,11 @@ def ensure_dir(path):
 
 def list_csv_files(data_dir):
     # 列出测试目录下的所有 CSV，并按名称排序，保证取样顺序稳定。
+    # 中文注释：如果配置直接指向单个 CSV 文件，也允许只读取这一份数据，便于板端快速定向测试。
+    if str(data_dir).lower().endswith(".csv"):
+        if exists(data_dir):
+            return [data_dir]
+        return []
     try:
         names = os.listdir(data_dir)
     except OSError:
@@ -814,6 +841,74 @@ def load_json(path):
     # 统一 JSON 读取入口。
     with open(path, "r") as f:
         return json.load(f)
+
+
+def is_abs_path(path):
+    # 判断路径是否已经是绝对路径，兼容 Windows 和板端 `/sdcard/...` 写法。
+    text = norm_path(path)
+    if not text:
+        return False
+    if text.startswith("/"):
+        return True
+    return len(text) > 2 and text[1] == ":" and text[2] == "/"
+
+
+def resolve_runtime_config_path(root, cli_args):
+    # 允许通过 `--config xxx.json` 或首个 json/jsonc 位置参数显式指定配置文件。
+    # 这样同一套脚本就能配合 `raw_cnn_k230/configs/` 下的多份配置使用。
+    selected = None
+    args = list(cli_args or [])
+    idx = 0
+    while idx < len(args):
+        token = str(args[idx])
+        if token == "--config":
+            if idx + 1 >= len(args):
+                raise ValueError("--config requires a path argument.")
+            selected = str(args[idx + 1])
+            break
+        if token.lower().endswith(".json") or token.lower().endswith(".jsonc"):
+            selected = token
+            break
+        idx += 1
+
+    if OVERRIDE_CONFIG_PATH:
+        selected = str(OVERRIDE_CONFIG_PATH)
+
+    if not selected:
+        return join_path(root, DEFAULT_RUNTIME_CONFIG_PATH)
+    if is_abs_path(selected):
+        return norm_path(selected)
+    return join_path(root, selected)
+
+
+def normalize_runtime_mode(raw_mode):
+    # 缁熶竴杩愯妯″紡鍛藉悕锛涙妸鍘嗗彶鍒悕鏀跺彛涓烘爣鍑嗗啓娉曘€?
+    mode = str(raw_mode or "csv_cached").strip().lower()
+    alias_map = {
+        "online_uart": "uart_online",
+        "echo": "uart_echo",
+        "frame_return": "uart_frame_return",
+        "debug_ack": "uart_debug_ack",
+        "ack": "uart_debug_ack",
+    }
+    return alias_map.get(mode, mode)
+
+
+def get_runtime_section(runtime_cfg, section_name):
+    # 浼樺厛璇昏鑼冮厤缃潡锛屽叧閿椂鍏煎鏃у瓧娈靛悕銆?
+    if not isinstance(runtime_cfg, dict):
+        return {}
+    section = runtime_cfg.get(section_name, None)
+    if isinstance(section, dict):
+        return section
+    legacy_map = {
+        "uart_online": "online_uart",
+    }
+    legacy_name = legacy_map.get(section_name, None)
+    legacy_section = runtime_cfg.get(legacy_name, None)
+    if isinstance(legacy_section, dict):
+        return legacy_section
+    return {}
 
 
 def require_positive_int(value, field_name):
@@ -876,7 +971,36 @@ def normalize_feature_mode(feature_mode):
     text = str(feature_mode).strip().lower().replace("-", "_").replace(" ", "_")
     if text in {"window_demean", "demean", "window_mean_center"}:
         return "window_demean"
+    if text in {"window_rel_demean", "relative_demean", "window_mean_ratio"}:
+        return "window_rel_demean"
     return "raw"
+
+
+def normalize_model_type(model_type):
+    # 统一模型类型写法，兼容 cnn / cnn_all / cnn_lstm 等别名。
+    text = str(model_type or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if text in {"cnn", "cnn_all", "raw_cnn"}:
+        return "cnn"
+    if text in {"cnn_lstm", "cnnlstm"}:
+        return "cnn_lstm"
+    if text in {"cnn_tcn", "cnntcn"}:
+        return "cnn_tcn"
+    if text in {"cnn_tcn_seg3_soft_stats_moe", "cnn_tcn_seg3", "cnntcnseg3"}:
+        return "cnn_tcn_seg3_soft_stats_moe"
+    return ""
+
+
+def get_model_type(cfg):
+    # 优先读取配置中的 model.type；若缺省，则根据 sequence_length 自动推断。
+    model_cfg = cfg.get("model", {})
+    text = normalize_model_type(model_cfg.get("type", ""))
+    if text:
+        return text
+    data_cfg = cfg.get("data", {})
+    seq_length = require_positive_int(data_cfg.get("sequence_length", 1), "data.sequence_length")
+    if seq_length <= 1:
+        return "cnn"
+    return "cnn_lstm"
 
 
 def get_feature_mode(cfg):
@@ -889,6 +1013,14 @@ def apply_feature_mode_1d(src_window, feature_mode, out_window):
     if mode == "window_demean":
         mean_value = float(np.sum(src_window) / float(len(src_window)))
         out_window[:] = src_window - mean_value
+        return out_window
+    if mode == "window_rel_demean":
+        # 中文注释：先去窗口均值，再除以均值绝对值，避免不同基线频率直接主导幅度。
+        mean_value = float(np.sum(src_window) / float(len(src_window)))
+        denom = abs(mean_value)
+        if denom < 1e-6:
+            denom = 1e-6
+        out_window[:] = (src_window - mean_value) / denom
         return out_window
     out_window[:] = src_window
     return out_window
@@ -989,6 +1121,520 @@ def expand_ring_window(ring_row, write_idx, out_window):
     return out_window
 
 
+def expand_sequence_ring(seq_ring, write_idx, out_seq):
+    # 灏嗗簭鍒楃幆褰㈢紦鍐插睍寮€涓衡€滄渶鏃?-> 鏈€鏂扳€濈殑鍏ㄥ簭鍒椼€?
+    n = int(len(seq_ring))
+    idx = int(write_idx) % n
+    if idx == 0:
+        out_seq[:] = seq_ring
+        return out_seq
+    right = n - idx
+    out_seq[:right] = seq_ring[idx:]
+    out_seq[right:] = seq_ring[:idx]
+    return out_seq
+
+
+ZERO_GUARD_DEFAULT_THRESHOLDS = {
+    "diff_p95_abs": 75.0,
+    "win_range_mean": 280.0,
+    "win_std_mean": 40.0,
+    "absz_mean": 0.012,
+}
+
+
+def get_zero_guard_config(cfg):
+    # 中文注释：板端优先读取顶层 zero_guard；兼容把配置写在 preprocessing.zero_guard 下面的形式。
+    guard_cfg = cfg.get("zero_guard", None)
+    if guard_cfg is None:
+        preprocessing_cfg = cfg.get("preprocessing", {})
+        guard_cfg = preprocessing_cfg.get("zero_guard", {})
+    if not isinstance(guard_cfg, dict):
+        guard_cfg = {}
+    return guard_cfg
+
+
+def read_zero_guard_thresholds(guard_cfg):
+    # 中文注释：复制默认阈值，再叠加用户配置，避免缺字段时板端启动失败。
+    thresholds = dict(ZERO_GUARD_DEFAULT_THRESHOLDS)
+    user_thresholds = guard_cfg.get("thresholds", {})
+    if isinstance(user_thresholds, dict):
+        for key in ZERO_GUARD_DEFAULT_THRESHOLDS:
+            if user_thresholds.get(key, None) is not None:
+                thresholds[key] = float(user_thresholds[key])
+    for key in ZERO_GUARD_DEFAULT_THRESHOLDS:
+        if guard_cfg.get(key, None) is not None:
+            thresholds[key] = float(guard_cfg[key])
+    return thresholds
+
+
+def zero_guard_percentile_from_sorted(values, pct):
+    # 中文注释：MicroPython/ulab 上不依赖 np.percentile，直接用排序后的近似分位点。
+    n = int(len(values))
+    if n <= 0:
+        return 0.0
+    values.sort()
+    idx = int((float(n) - 1.0) * float(pct) / 100.0 + 0.5)
+    if idx < 0:
+        idx = 0
+    if idx >= n:
+        idx = n - 1
+    return float(values[idx])
+
+
+def compute_zero_guard_features(raw_seq, scaled_seq):
+    # 中文注释：raw_seq 是未做 window_demean 的原始窗口序列，scaled_seq 是送入模型前的标准化序列。
+    seq_len = int(raw_seq.shape[0])
+    width = int(raw_seq.shape[1])
+    if seq_len <= 0 or width <= 0:
+        return {
+            "win_std_mean": 0.0,
+            "win_range_mean": 0.0,
+            "diff_p95_abs": 0.0,
+            "absz_mean": 0.0,
+        }
+
+    std_total = 0.0
+    range_total = 0.0
+    diff_abs = []
+    for t in range(seq_len):
+        row = raw_seq[t]
+        row_min = float(row[0])
+        row_max = float(row[0])
+        row_sum = 0.0
+        for i in range(width):
+            v = float(row[i])
+            row_sum += v
+            if v < row_min:
+                row_min = v
+            if v > row_max:
+                row_max = v
+            if i > 0:
+                d = v - float(row[i - 1])
+                if d < 0.0:
+                    d = -d
+                diff_abs.append(d)
+        row_mean = row_sum / float(width)
+        var_sum = 0.0
+        for i in range(width):
+            d = float(row[i]) - row_mean
+            var_sum += d * d
+        std_total += float(np.sqrt(var_sum / float(width)))
+        range_total += row_max - row_min
+
+    absz_total = 0.0
+    absz_count = 0
+    if scaled_seq is not None:
+        for t in range(int(scaled_seq.shape[0])):
+            for i in range(int(scaled_seq.shape[1])):
+                v = float(scaled_seq[t][i])
+                if v < 0.0:
+                    v = -v
+                absz_total += v
+                absz_count += 1
+
+    absz_mean = 0.0
+    if absz_count > 0:
+        absz_mean = absz_total / float(absz_count)
+
+    return {
+        "win_std_mean": std_total / float(seq_len),
+        "win_range_mean": range_total / float(seq_len),
+        "diff_p95_abs": zero_guard_percentile_from_sorted(diff_abs, 95.0),
+        "absz_mean": absz_mean,
+    }
+
+
+def is_zero_guard_hit(raw_seq, scaled_seq, guard_cfg):
+    # 中文注释：低波动特征按投票命中；达到 min_votes 后直接输出 0，不再进入神经网络。
+    if not bool(guard_cfg.get("enabled", False)):
+        return False, 0, {}
+    thresholds = read_zero_guard_thresholds(guard_cfg)
+    min_votes = int(guard_cfg.get("min_votes", 3))
+    if min_votes <= 0:
+        min_votes = 1
+
+    features = compute_zero_guard_features(raw_seq, scaled_seq)
+    votes = 0
+    active_count = 0
+    for key in ZERO_GUARD_DEFAULT_THRESHOLDS:
+        if thresholds.get(key, None) is None:
+            continue
+        active_count += 1
+        if float(features.get(key, 0.0)) <= float(thresholds[key]):
+            votes += 1
+    if active_count <= 0:
+        return False, 0, features
+    if min_votes > active_count:
+        min_votes = active_count
+    return votes >= min_votes, votes, features
+
+
+def get_postprocessing_config(cfg):
+    # 中文注释：后处理只作用于模型预测值，不改变 kmodel 输入输出，也不参与 zero_guard 判定。
+    pp_cfg = cfg.get("postprocessing", {})
+    if not isinstance(pp_cfg, dict):
+        pp_cfg = {}
+    return pp_cfg
+
+
+def normalize_postprocessing_type(raw_type):
+    text = str(raw_type or "None").strip().lower()
+    text = text.replace("-", "_").replace(" ", "_")
+    if text in {"", "none", "off", "disable", "disabled", "false"}:
+        return "none"
+    if text in {"exponential", "exponential_smoothing", "exponential_smoother", "exp"}:
+        return "exponential"
+    if text in {"kalman", "kalman_smoother", "kalman_filter"}:
+        return "kalman"
+    raise ValueError("Unsupported postprocessing.type: " + str(raw_type))
+
+
+class RuntimePostprocessor:
+    # 中文注释：K230 在线推理是流式输出，这里为每个通道单独保存平滑状态。
+    def __init__(self, cfg, channel_count=1):
+        self.cfg = cfg
+        self.enabled = bool(cfg.get("enabled", True))
+        self.kind = normalize_postprocessing_type(cfg.get("type", "None"))
+        if self.kind == "none":
+            self.enabled = False
+        self.channel_count = int(channel_count)
+        if self.channel_count <= 0:
+            self.channel_count = 1
+        self.alpha = float(cfg.get("exp_smooth_alpha", 0.3))
+        if self.alpha < 0.0:
+            self.alpha = 0.0
+        if self.alpha > 1.0:
+            self.alpha = 1.0
+        self.kalman_q = float(cfg.get("kalman_q", 0.001))
+        self.kalman_r = float(cfg.get("kalman_r", 0.1))
+        if self.kalman_q < 0.0:
+            self.kalman_q = 0.0
+        if self.kalman_r <= 0.0:
+            self.kalman_r = 0.1
+        self.apply_to_zero_guard = bool(cfg.get("apply_to_zero_guard", False))
+        self.reset_on_zero_guard = bool(cfg.get("reset_on_zero_guard", True))
+        self._exp_values = [None] * self.channel_count
+        self._kalman_x = [None] * self.channel_count
+        self._kalman_p = [1.0] * self.channel_count
+
+    def reset_channel(self, channel):
+        idx = int(channel)
+        if idx < 0 or idx >= self.channel_count:
+            return
+        self._exp_values[idx] = None
+        self._kalman_x[idx] = None
+        self._kalman_p[idx] = 1.0
+
+    def reset_all(self):
+        for i in range(self.channel_count):
+            self.reset_channel(i)
+
+    def update(self, channel, value, zero_guard_hit=False):
+        if not self.enabled:
+            return float(value)
+        idx = int(channel)
+        if idx < 0:
+            idx = 0
+        if idx >= self.channel_count:
+            idx = self.channel_count - 1
+        if zero_guard_hit and not self.apply_to_zero_guard:
+            if self.reset_on_zero_guard:
+                self.reset_channel(idx)
+            return float(value)
+        if self.kind == "exponential":
+            return self._update_exponential(idx, value)
+        if self.kind == "kalman":
+            return self._update_kalman(idx, value)
+        return float(value)
+
+    def _update_exponential(self, channel, value):
+        measurement = float(value)
+        last = self._exp_values[channel]
+        if last is None:
+            self._exp_values[channel] = measurement
+            return measurement
+        smoothed = self.alpha * measurement + (1.0 - self.alpha) * float(last)
+        self._exp_values[channel] = smoothed
+        return smoothed
+
+    def _update_kalman(self, channel, value):
+        measurement = float(value)
+        x = self._kalman_x[channel]
+        if x is None:
+            self._kalman_x[channel] = measurement
+            self._kalman_p[channel] = 1.0
+            return measurement
+        p_pred = float(self._kalman_p[channel]) + self.kalman_q
+        k_gain = p_pred / (p_pred + self.kalman_r)
+        x_new = float(x) + k_gain * (measurement - float(x))
+        self._kalman_x[channel] = x_new
+        self._kalman_p[channel] = (1.0 - k_gain) * p_pred
+        return x_new
+
+
+def create_runtime_postprocessor(cfg, channel_count=1):
+    pp_cfg = get_postprocessing_config(cfg)
+    return RuntimePostprocessor(pp_cfg, channel_count=channel_count)
+
+
+def mean_1d(values):
+    # 中文注释：报警判断要用原始窗口均值，手写循环避免板端额外依赖。
+    count = int(len(values))
+    if count <= 0:
+        return 0.0
+    total = 0.0
+    for i in range(count):
+        total += float(values[i])
+    return total / float(count)
+
+
+def median_list(values):
+    # 中文注释：多路或多模型预测用中位数融合，降低单点跳动对报警的影响。
+    count = int(len(values))
+    if count <= 0:
+        return 0.0
+    ordered = sorted([float(v) for v in values])
+    mid = count // 2
+    if (count % 2) == 1:
+        return float(ordered[mid])
+    return (float(ordered[mid - 1]) + float(ordered[mid])) / 2.0
+
+
+def clamp_count(value, fallback, minimum, maximum):
+    try:
+        out = int(value)
+    except Exception:
+        out = int(fallback)
+    if out < minimum:
+        out = minimum
+    if out > maximum:
+        out = maximum
+    return out
+
+
+class FullGasAlarmState:
+    """
+    中文注释：通用满气报警状态机。
+
+    这个状态机不关心当前是单模型还是多模型，只接收：
+    1. 本轮预测值列表。
+    2. 本轮原始平均频率。
+    3. 本轮是否命中 zero_guard。
+    """
+
+    def __init__(self, cfg):
+        if not isinstance(cfg, dict):
+            cfg = {}
+        self.enabled = bool(cfg.get("enabled", False))
+        self.output_name = str(cfg.get("output_name", "full_gas_alarm"))
+        self.output_slot = int(cfg.get("output_slot", 3))
+        self.on_value = float(cfg.get("on_value", 1.0))
+        self.off_value = float(cfg.get("off_value", 0.0))
+
+        self.history_size = clamp_count(cfg.get("history_size", 6), 6, 2, 64)
+        self.recent_count = clamp_count(cfg.get("recent_count", 3), 3, 1, self.history_size)
+
+        self.danger_threshold = float(cfg.get("danger_threshold", 0.55))
+        self.danger_min_count = clamp_count(cfg.get("danger_min_count", 5), 5, 1, self.history_size)
+        self.alarm_threshold = float(cfg.get("alarm_threshold", cfg.get("threshold_on", 0.60)))
+        self.alarm_recent_count = clamp_count(
+            cfg.get("alarm_recent_count", self.recent_count),
+            self.recent_count,
+            1,
+            self.history_size,
+        )
+        self.alarm_recent_min_count = clamp_count(
+            cfg.get("alarm_recent_min_count", 2),
+            2,
+            1,
+            self.alarm_recent_count,
+        )
+
+        self.threshold_off = float(cfg.get("threshold_off", 0.52))
+        self.mean_off = float(cfg.get("mean_off", 0.54))
+        self.recent_soft_off = float(cfg.get("recent_soft_off", 0.58))
+        self.min_low_count = clamp_count(cfg.get("min_low_count", 4), 4, 1, self.history_size)
+
+        self.freq_slope_min = float(cfg.get("freq_slope_min", 1.0))
+        self.freq_rise_min_count = clamp_count(cfg.get("freq_rise_min_count", 4), 4, 1, self.history_size - 1)
+        self.freq_stop_delta = float(cfg.get("freq_stop_delta", 0.0))
+        self.hit_on_count = clamp_count(cfg.get("hit_on_count", 2), 2, 1, 64)
+        self.hit_off_count = clamp_count(cfg.get("hit_off_count", 3), 3, 1, 64)
+
+        self.dry_history = []
+        self.freq_history = []
+        self.alarm_on = False
+        self.on_hits = 0
+        self.off_hits = 0
+        self.last_reason = "disabled" if not self.enabled else "warming"
+
+    def _append_history(self, history, value):
+        history.append(float(value))
+        while len(history) > self.history_size:
+            del history[0]
+
+    def _mean_recent(self, history, count):
+        usable = int(count)
+        if usable <= 0:
+            return 0.0
+        if usable > len(history):
+            usable = len(history)
+        if usable <= 0:
+            return 0.0
+        start = len(history) - usable
+        total = 0.0
+        for i in range(start, len(history)):
+            total += float(history[i])
+        return total / float(usable)
+
+    def _mean_all(self, history):
+        return self._mean_recent(history, len(history))
+
+    def _count_ge(self, history, threshold):
+        count = 0
+        for value in history:
+            if float(value) >= float(threshold):
+                count += 1
+        return count
+
+    def _count_le(self, history, threshold):
+        count = 0
+        for value in history:
+            if float(value) <= float(threshold):
+                count += 1
+        return count
+
+    def _count_recent_ge(self, history, count, threshold):
+        usable = int(count)
+        if usable > len(history):
+            usable = len(history)
+        if usable <= 0:
+            return 0
+        start = len(history) - usable
+        out = 0
+        for i in range(start, len(history)):
+            if float(history[i]) >= float(threshold):
+                out += 1
+        return out
+
+    def _rise_count(self, history):
+        count = 0
+        for i in range(1, len(history)):
+            if float(history[i]) > float(history[i - 1]):
+                count += 1
+        return count
+
+    def _linear_slope(self, history):
+        count = int(len(history))
+        if count <= 1:
+            return 0.0
+        x_mean = float(count - 1) / 2.0
+        y_total = 0.0
+        for value in history:
+            y_total += float(value)
+        y_mean = y_total / float(count)
+        num = 0.0
+        den = 0.0
+        for i in range(count):
+            dx = float(i) - x_mean
+            num += dx * (float(history[i]) - y_mean)
+            den += dx * dx
+        if den <= 0.0:
+            return 0.0
+        return num / den
+
+    def update(self, model_values, freq_mean, zero_guard_hit=False):
+        if not self.enabled:
+            return self.off_value
+
+        dry_value = median_list(model_values)
+        self._append_history(self.dry_history, dry_value)
+        self._append_history(self.freq_history, freq_mean)
+
+        if len(self.dry_history) < self.history_size or len(self.freq_history) < self.history_size:
+            self.last_reason = "warming"
+            return self.on_value if self.alarm_on else self.off_value
+
+        dry_mean = self._mean_all(self.dry_history)
+        dry_recent_mean = self._mean_recent(self.dry_history, self.recent_count)
+        danger_count = self._count_ge(self.dry_history, self.danger_threshold)
+        alarm_recent_count = self._count_recent_ge(
+            self.dry_history,
+            self.alarm_recent_count,
+            self.alarm_threshold,
+        )
+        low_count = self._count_le(self.dry_history, self.threshold_off)
+        freq_delta = float(self.freq_history[-1]) - float(self.freq_history[0])
+        freq_slope = self._linear_slope(self.freq_history)
+        freq_rise_count = self._rise_count(self.freq_history)
+
+        dry_high = danger_count >= self.danger_min_count
+        alarm_line_hit = alarm_recent_count >= self.alarm_recent_min_count
+        freq_rising = (
+            freq_slope >= self.freq_slope_min
+            and freq_rise_count >= self.freq_rise_min_count
+        )
+        alarm_condition = dry_high and alarm_line_hit and freq_rising and not bool(zero_guard_hit)
+
+        clear_by_low = dry_mean <= self.mean_off or low_count >= self.min_low_count
+        clear_by_trend_stop = dry_recent_mean <= self.recent_soft_off and freq_delta <= self.freq_stop_delta
+        clear_condition = clear_by_low or clear_by_trend_stop or bool(zero_guard_hit)
+
+        if self.alarm_on:
+            if clear_condition:
+                self.off_hits += 1
+            else:
+                self.off_hits = 0
+            self.on_hits = 0
+            if self.off_hits >= self.hit_off_count:
+                self.alarm_on = False
+                self.off_hits = 0
+                self.last_reason = "clear"
+            else:
+                self.last_reason = "hold_on"
+        else:
+            if alarm_condition:
+                self.on_hits += 1
+            else:
+                self.on_hits = 0
+            self.off_hits = 0
+            if self.on_hits >= self.hit_on_count:
+                self.alarm_on = True
+                self.on_hits = 0
+                self.last_reason = "alarm"
+            else:
+                self.last_reason = "hold_off"
+
+        return self.on_value if self.alarm_on else self.off_value
+
+    def summary(self):
+        if not self.enabled:
+            return "disabled"
+        return (
+            "enabled=True, output_name={}, output_slot={}, history_size={}, "
+            "danger_threshold={}, alarm_threshold={}, threshold_off={}, state={}"
+        ).format(
+            self.output_name,
+            self.output_slot,
+            self.history_size,
+            self.danger_threshold,
+            self.alarm_threshold,
+            self.threshold_off,
+            bool(self.alarm_on),
+        )
+
+
+def write_full_gas_alarm_to_values(send_vals, alarm_state, model_values, freq_mean, zero_guard_hit=False):
+    # 中文注释：把通用报警结果写入配置指定的输出槽；槽位越界时只更新状态不改回包。
+    if alarm_state is None or not alarm_state.enabled:
+        return None
+    alarm_value = alarm_state.update(model_values, freq_mean, zero_guard_hit=zero_guard_hit)
+    slot = int(alarm_state.output_slot)
+    if slot >= 0 and slot < len(send_vals):
+        send_vals[slot] = float(alarm_value)
+    return alarm_value
+
+
 def make_dataset_cache_key(cfg, root, max_samples, scaler_json_path):
     # 用配置项与 CSV/Scaler 文件元数据生成缓存键。
     # 只要关键输入变化，缓存键就会变化，从而触发重建。
@@ -1019,13 +1665,16 @@ def ensure_dataset_cache(cfg, root, max_samples, scaler_json_path):
     # 若缓存命中，直接复用已标准化的数据；
     # 若缓存失效，再重新遍历 CSV 构建。
     cache_key = make_dataset_cache_key(cfg, root, max_samples, scaler_json_path)
+    model_type = get_model_type(cfg)
     cached_X = RUNTIME_CACHE.get("X_scaled", None)
+    cached_raw = RUNTIME_CACHE.get("X_raw_aux", None)
     cached_y = RUNTIME_CACHE.get("y", None)
     if (
         RUNTIME_CACHE.get("dataset_key", None) == cache_key
         and cached_X is not None
         and cached_y is not None
         and int(cached_X.shape[0]) > 0
+        and (model_type != "cnn_tcn_seg3_soft_stats_moe" or cached_raw is not None)
     ):
         return cached_X, cached_y, False
 
@@ -1033,12 +1682,16 @@ def ensure_dataset_cache(cfg, root, max_samples, scaler_json_path):
     X, y = build_dataset(cfg, root, max_samples=max_samples)
     if X.shape[0] == 0:
         raise RuntimeError("No valid samples found in test_data.")
+    X_raw_aux = None
+    if model_type == "cnn_tcn_seg3_soft_stats_moe":
+        X_raw_aux = astype_float_array(X.copy())
     X_scaled = scale_features(X, scaler_json_path)
     del X
     gc.collect()
 
     RUNTIME_CACHE["dataset_key"] = cache_key
     RUNTIME_CACHE["X_scaled"] = X_scaled
+    RUNTIME_CACHE["X_raw_aux"] = X_raw_aux
     RUNTIME_CACHE["y"] = y
     RUNTIME_CACHE["cursor"] = 0
     return X_scaled, y, True
@@ -1101,7 +1754,7 @@ def collect_labels_range(y_all, start_idx, count):
     return out
 
 
-def run_kmodel_inference_cached(kmodel_path, X_scaled, start_idx, count, uart_sender=None):
+def run_kmodel_inference_cached(kmodel_path, X_scaled, start_idx, count, uart_sender=None, X_raw_aux=None, postprocessor=None):
     # 在已缓存的离线样本上做一小批推理。
     # 这是当前离线调试模式提速的关键：不再每轮重建全部样本。
     nn, kpu, model_reloaded = ensure_kpu_cache(kmodel_path)
@@ -1114,17 +1767,27 @@ def run_kmodel_inference_cached(kmodel_path, X_scaled, start_idx, count, uart_se
         sample = sample.reshape((1, sample.shape[0], sample.shape[1]))
         input_tensor = nn.from_numpy(sample)
         kpu.set_input_tensor(0, input_tensor)
+        raw_input_tensor = None
+        if X_raw_aux is not None:
+            raw_sample = astype_float_array(X_raw_aux[idx])
+            raw_sample = raw_sample.reshape((1, raw_sample.shape[0], raw_sample.shape[1]))
+            raw_input_tensor = nn.from_numpy(raw_sample)
+            kpu.set_input_tensor(1, raw_input_tensor)
         t0 = now_us()
         kpu.run()
         t1 = now_us()
         infer_us_total += diff_us(t1, t0)
         output = kpu.get_output_tensor(0)
         pred = float(output.to_numpy().reshape(-1)[0])
+        if postprocessor is not None:
+            pred = postprocessor.update(0, pred)
         preds.append(pred)
         if uart_sender is not None:
             uart_sender.send_scaled_prediction(pred)
         del output
         del input_tensor
+        if raw_input_tensor is not None:
+            del raw_input_tensor
         idx += 1
         if idx >= total:
             idx = 0
@@ -1133,7 +1796,7 @@ def run_kmodel_inference_cached(kmodel_path, X_scaled, start_idx, count, uart_se
     return as_float_array(preds), infer_us_total, model_reloaded
 
 
-def run_online_uart_inference(cfg, root, uart_sender, kmodel_path, scaler_json_path):
+def run_online_uart_inference_cnn(cfg, root, uart_sender, kmodel_path, scaler_json_path):
     """
     在线串口推理模式。
 
@@ -1144,23 +1807,35 @@ def run_online_uart_inference(cfg, root, uart_sender, kmodel_path, scaler_json_p
     4. 把 12 路预测结果再按同样协议打包发回去。
     """
     runtime_cfg = cfg.get("runtime", {})
-    online_cfg = runtime_cfg.get("online_uart", {})
+    online_cfg = get_runtime_section(runtime_cfg, "uart_online")
+    alarm_cfg = get_runtime_section(runtime_cfg, "full_gas_alarm")
     data_cfg = cfg.get("data", {})
 
     if uart_sender is None or not uart_sender.enabled or uart_sender.uart is None:
-        raise RuntimeError("UART sender is disabled; online uart mode cannot start.")
+        raise RuntimeError("UART sender is disabled; uart_online mode cannot start.")
 
     window_size = require_positive_int(data_cfg.get("base_window_size", 500), "data.base_window_size")
     seq_length = require_positive_int(data_cfg.get("sequence_length", 1), "data.sequence_length")
     if seq_length != 1:
-        raise RuntimeError("online uart mode currently requires data.sequence_length = 1.")
+        raise RuntimeError("uart_online mode currently requires data.sequence_length = 1.")
 
-    channel_count = require_positive_int(online_cfg.get("channel_count", uart_sender.value_count), "runtime.online_uart.channel_count")
-    infer_step_frames = require_positive_int(online_cfg.get("infer_step_frames", 1), "runtime.online_uart.infer_step_frames")
+    channel_count = require_positive_int(online_cfg.get("channel_count", uart_sender.value_count), "runtime.uart_online.channel_count")
+    postprocessor = create_runtime_postprocessor(cfg, channel_count=channel_count)
+    full_gas_alarm = FullGasAlarmState(alarm_cfg)
+    infer_step_frames = require_positive_int(online_cfg.get("infer_step_frames", 1), "runtime.uart_online.infer_step_frames")
     idle_sleep_ms = int(online_cfg.get("idle_sleep_ms", 1))
     log_every_n_frames = int(online_cfg.get("log_every_n_frames", 50))
     warmup_send = bool(online_cfg.get("send_zeros_before_ready", False))
+    quiet = bool(online_cfg.get("quiet", False))
     debug_predict_trace = bool(online_cfg.get("debug_predict_trace", False))
+    debug_uart_read_timing = bool(online_cfg.get("debug_uart_read_timing", False))
+    debug_outer_rx = bool(online_cfg.get("debug_outer_rx", False))
+    debug_outer_rx_only_abnormal = bool(online_cfg.get("debug_outer_rx_only_abnormal", False))
+    debug_outer_rx_interval_warn_ms = float(online_cfg.get("debug_outer_rx_interval_warn_ms", 25.0))
+    debug_tx_timing = bool(online_cfg.get("debug_tx_timing", False))
+    debug_tx_only_abnormal = bool(online_cfg.get("debug_tx_only_abnormal", False))
+    debug_tx_interval_min_warn_ms = float(online_cfg.get("debug_tx_interval_min_warn_ms", 180.0))
+    debug_tx_interval_max_warn_ms = float(online_cfg.get("debug_tx_interval_max_warn_ms", 240.0))
     flush_rx_on_start = bool(online_cfg.get("flush_rx_on_start", True))
     startup_flush_empty_rounds = int(online_cfg.get("startup_flush_empty_rounds", 3))
     startup_flush_sleep_ms = int(online_cfg.get("startup_flush_sleep_ms", 10))
@@ -1209,9 +1884,13 @@ def run_online_uart_inference(cfg, root, uart_sender, kmodel_path, scaler_json_p
     tmp_scaled = empty_float((window_size,))
     sample3d = empty_float((1, 1, window_size))
 
-    print("online_uart_start: root={}".format(root))
-    print(
-        "online_uart_cfg: channels={}, window={}, infer_step_frames={}, input_type={}, input_order={}, model_reloaded={}".format(
+    def online_print(*args):
+        if not quiet:
+            print(*args)
+
+    online_print("uart_online_start: root={}".format(root))
+    online_print(
+        "uart_online_cfg: model_type=cnn, channels={}, window={}, infer_step_frames={}, input_type={}, input_order={}, model_reloaded={}".format(
             channel_count,
             window_size,
             infer_step_frames,
@@ -1220,10 +1899,12 @@ def run_online_uart_inference(cfg, root, uart_sender, kmodel_path, scaler_json_p
             bool(model_reloaded),
         )
     )
-    print("online_uart_feature_mode: {}".format(feature_mode))
+    online_print("uart_online_feature_mode: {}".format(feature_mode))
+    online_print("uart_online_postprocessing: enabled={}, type={}".format(bool(postprocessor.enabled), postprocessor.kind))
+    online_print("uart_online_full_gas_alarm:", full_gas_alarm.summary())
     if uart_sender.outer_frame_enabled:
-        print(
-            "online_uart_outer_frame_cfg: outer_frame_count={}, outer_header={}, outer_tail={}".format(
+        online_print(
+            "uart_online_outer_frame_cfg: outer_frame_count={}, outer_header={}, outer_tail={}".format(
                 uart_sender.outer_frame_count,
                 " ".join("{:02X}".format(b) for b in uart_sender.outer_header),
                 " ".join("{:02X}".format(b) for b in uart_sender.outer_tail),
@@ -1235,26 +1916,93 @@ def run_online_uart_inference(cfg, root, uart_sender, kmodel_path, scaler_json_p
             empty_rounds=startup_flush_empty_rounds,
             sleep_between_ms=startup_flush_sleep_ms,
         )
-        print(
-            "online_uart_startup_flush: enabled=True, flushed_bytes={}, empty_rounds={}, sleep_ms={}".format(
+        online_print(
+            "uart_online_startup_flush: enabled=True, flushed_bytes={}, empty_rounds={}, sleep_ms={}".format(
                 flushed_bytes,
                 startup_flush_empty_rounds,
                 startup_flush_sleep_ms,
             )
         )
     else:
-        print("online_uart_startup_flush: enabled=False")
+        online_print("uart_online_startup_flush: enabled=False")
 
     session_start_us = now_us()
     first_rx_us = None
     last_infer_trigger_us = None
+    last_uart_read_us = None
+    last_outer_rx_us = None
+    last_small_rx_us = None
+    last_tx_us = None
 
     while True:
         raw = uart_sender.uart.read()
+        rx_now_us = now_us()
+        if debug_uart_read_timing and not quiet:
+            read_interval_ms = -1.0
+            if last_uart_read_us is not None:
+                read_interval_ms = diff_us(rx_now_us, last_uart_read_us) / 1000.0
+            raw_len = 0
+            if raw:
+                raw_len = len(raw)
+            print(
+                "uart_online_read: ts_ms={:.3f}, interval_ms={:.3f}, raw_bytes={}, has_data={}".format(
+                    rx_now_us / 1000.0,
+                    read_interval_ms,
+                    raw_len,
+                    bool(raw),
+                )
+            )
+        last_uart_read_us = rx_now_us
         if raw:
             frames = parser.feed(raw)
             if not frames:
                 continue
+            if uart_sender.outer_frame_enabled:
+                outer_count = int(uart_sender.outer_frame_count)
+                parsed_outer_frames = len(frames) // outer_count
+                if parsed_outer_frames > 0:
+                    outer_interval_ms = -1.0
+                    if last_outer_rx_us is not None:
+                        outer_interval_ms = diff_us(rx_now_us, last_outer_rx_us) / 1000.0
+                    if debug_outer_rx:
+                        need_print_outer_rx = True
+                        if debug_outer_rx_only_abnormal:
+                            need_print_outer_rx = parsed_outer_frames > 1
+                            if not need_print_outer_rx and outer_interval_ms >= 0.0:
+                                need_print_outer_rx = outer_interval_ms >= debug_outer_rx_interval_warn_ms
+                        if need_print_outer_rx:
+                            online_print(
+                                "uart_online_outer_rx: ts_ms={:.3f}, outer_frame_idx={}, batch_outer_frames={}, interval_ms={:.3f}, raw_bytes={}, parsed_small_frames={}".format(
+                                    rx_now_us / 1000.0,
+                                    (total_rx_frames + len(frames)) // outer_count,
+                                    parsed_outer_frames,
+                                    outer_interval_ms,
+                                    len(raw),
+                                    len(frames),
+                                )
+                            )
+                        last_outer_rx_us = rx_now_us
+            else:
+                small_interval_ms = -1.0
+                if last_small_rx_us is not None:
+                    small_interval_ms = diff_us(rx_now_us, last_small_rx_us) / 1000.0
+                if debug_outer_rx:
+                    need_print_small_rx = True
+                    if debug_outer_rx_only_abnormal:
+                        need_print_small_rx = len(frames) > 1
+                        if not need_print_small_rx and small_interval_ms >= 0.0:
+                            need_print_small_rx = small_interval_ms >= debug_outer_rx_interval_warn_ms
+                    if need_print_small_rx:
+                        online_print(
+                            "uart_online_small_rx: ts_ms={:.3f}, small_frame_idx={}, batch_small_frames={}, interval_ms={:.3f}, raw_bytes={}".format(
+                                rx_now_us / 1000.0,
+                                total_rx_frames + len(frames),
+                                len(frames),
+                                small_interval_ms,
+                                len(raw),
+                            )
+                        )
+                    last_small_rx_us = rx_now_us
             for values in frames:
                 # 一帧输入对应 12 路同一时刻的采样值。
                 total_rx_frames += 1
@@ -1299,8 +2047,8 @@ def run_online_uart_inference(cfg, root, uart_sender, kmodel_path, scaler_json_p
                         trigger_outer_frame = total_rx_frames // outer_count
                         window_outer_start = (window_start + outer_count - 1) // outer_count
                         window_outer_end = (window_end + outer_count - 1) // outer_count
-                        print(
-                            "online_uart_trigger: infer_round_next={}, rx_small_frame_idx={}, rx_outer_frame_idx={}, window_small=[{}, {}], window_outer=[{}, {}], first_ready={}, elapsed_start_ms={:.3f}, elapsed_first_rx_ms={:.3f}, since_last_infer_ms={:.3f}".format(
+                        online_print(
+                            "uart_online_trigger: infer_round_next={}, rx_small_frame_idx={}, rx_outer_frame_idx={}, window_small=[{}, {}], window_outer=[{}, {}], first_ready={}, elapsed_start_ms={:.3f}, elapsed_first_rx_ms={:.3f}, since_last_infer_ms={:.3f}".format(
                                 infer_round + 1,
                                 total_rx_frames,
                                 trigger_outer_frame,
@@ -1315,8 +2063,8 @@ def run_online_uart_inference(cfg, root, uart_sender, kmodel_path, scaler_json_p
                             )
                         )
                     else:
-                        print(
-                            "online_uart_trigger: infer_round_next={}, rx_small_frame_idx={}, window_small=[{}, {}], first_ready={}, elapsed_start_ms={:.3f}, elapsed_first_rx_ms={:.3f}, since_last_infer_ms={:.3f}".format(
+                        online_print(
+                            "uart_online_trigger: infer_round_next={}, rx_small_frame_idx={}, window_small=[{}, {}], first_ready={}, elapsed_start_ms={:.3f}, elapsed_first_rx_ms={:.3f}, since_last_infer_ms={:.3f}".format(
                                 infer_round + 1,
                                 total_rx_frames,
                                 window_start,
@@ -1330,10 +2078,12 @@ def run_online_uart_inference(cfg, root, uart_sender, kmodel_path, scaler_json_p
                     last_infer_trigger_us = trigger_now_us
 
                 preds = []
+                freq_total = 0.0
                 t0 = now_us()
                 for c in range(channel_count):
                     # 逐路展开窗口、标准化、推理，得到该通道的干度结果。
                     expand_ring_window(ring[c], write_idx, tmp_window)
+                    freq_total += mean_1d(tmp_window)
                     apply_feature_mode_1d(tmp_window, feature_mode, tmp_feature)
                     tmp_scaled[:] = (tmp_feature - mean) / scale
                     sample3d[0][0] = tmp_scaled
@@ -1342,6 +2092,7 @@ def run_online_uart_inference(cfg, root, uart_sender, kmodel_path, scaler_json_p
                     kpu.run()
                     output = kpu.get_output_tensor(0)
                     pred = float(output.to_numpy().reshape(-1)[0])
+                    pred = postprocessor.update(c, pred)
                     preds.append(pred)
                     del output
                     del input_tensor
@@ -1354,34 +2105,555 @@ def run_online_uart_inference(cfg, root, uart_sender, kmodel_path, scaler_json_p
                         send_vals.append(float(preds[i]))
                     else:
                         send_vals.append(0.0)
+                write_full_gas_alarm_to_values(
+                    send_vals,
+                    full_gas_alarm,
+                    preds,
+                    freq_total / float(channel_count),
+                    zero_guard_hit=False,
+                )
+                tx_now_us = now_us()
+                tx_interval_ms = -1.0
+                if last_tx_us is not None:
+                    tx_interval_ms = diff_us(tx_now_us, last_tx_us) / 1000.0
                 uart_sender.send_values_frame(send_vals)
                 total_tx_frames += 1
                 infer_round += 1
+                if debug_tx_timing:
+                    need_print_tx = True
+                    if debug_tx_only_abnormal:
+                        need_print_tx = False
+                        if tx_interval_ms >= 0.0:
+                            if tx_interval_ms < debug_tx_interval_min_warn_ms:
+                                need_print_tx = True
+                            elif tx_interval_ms > debug_tx_interval_max_warn_ms:
+                                need_print_tx = True
+                    if need_print_tx:
+                        online_print(
+                            "uart_online_tx: ts_ms={:.3f}, tx_small_frame_idx={}, infer_round={}, interval_since_last_tx_ms={:.3f}, first3={}".format(
+                                tx_now_us / 1000.0,
+                                total_tx_frames,
+                                infer_round,
+                                tx_interval_ms,
+                                preds[:3],
+                            )
+                        )
+                last_tx_us = tx_now_us
                 infer_us = diff_us(now_us(), t0)
                 if debug_predict_trace:
-                    print(
-                        "online_uart_result: infer_round={}, infer_ms={:.3f}, tx_small_frame_idx={}, first3={}".format(
+                    online_print(
+                        "uart_online_result: infer_round={}, infer_ms={:.3f}, tx_small_frame_idx={}, first3={}, full_gas_alarm={}, alarm_reason={}".format(
                             infer_round,
                             infer_us / 1000.0,
                             total_tx_frames,
                             preds[:3],
+                            bool(full_gas_alarm.alarm_on) if full_gas_alarm.enabled else False,
+                            full_gas_alarm.last_reason,
                         )
                     )
 
                 if log_every_n_frames > 0 and (total_rx_frames % log_every_n_frames) == 0:
-                    print(
-                        "online_uart_stat: rx_frames={}, tx_frames={}, infer_round={}, infer_ms={:.3f}, first3={}".format(
+                    online_print(
+                        "uart_online_stat: rx_frames={}, tx_frames={}, infer_round={}, infer_ms={:.3f}, first3={}, full_gas_alarm={}".format(
                             total_rx_frames,
                             total_tx_frames,
                             infer_round,
                             infer_us / 1000.0,
                             preds[:3],
+                            bool(full_gas_alarm.alarm_on) if full_gas_alarm.enabled else False,
                         )
                     )
                 if infer_round % 20 == 0:
                     gc.collect()
         else:
             sleep_ms(idle_sleep_ms)
+
+
+def run_online_uart_inference_cnn_lstm(cfg, root, uart_sender, kmodel_path, scaler_json_path):
+    """
+    在线串口 CNN-LSTM 推理模式。
+
+    流程与离线 csv_cached 保持一致：
+    1. 持续接收 12 路原始点并写入基础窗口环形缓冲。
+    2. 每累计一个 base_step，就生成一个基础窗口特征。
+    3. 再把最近 sequence_length 个基础窗口拼成序列样本。
+    4. 序列满后按 sequence_step 触发一次推理。
+    """
+    runtime_cfg = cfg.get("runtime", {})
+    online_cfg = get_runtime_section(runtime_cfg, "uart_online")
+    alarm_cfg = get_runtime_section(runtime_cfg, "full_gas_alarm")
+    data_cfg = cfg.get("data", {})
+
+    if uart_sender is None or not uart_sender.enabled or uart_sender.uart is None:
+        raise RuntimeError("UART sender is disabled; uart_online mode cannot start.")
+
+    window_size = require_positive_int(data_cfg.get("base_window_size", 500), "data.base_window_size")
+    base_step = resolve_positive_step(data_cfg.get("base_step", None), window_size // 2, "data.base_step")
+    seq_length = require_positive_int(data_cfg.get("sequence_length", 1), "data.sequence_length")
+    seq_step = require_positive_int(data_cfg.get("sequence_step", 1), "data.sequence_step")
+    if seq_length <= 1:
+        raise RuntimeError("uart_online {} mode requires data.sequence_length > 1.".format(get_model_type(cfg)))
+
+    channel_count = require_positive_int(online_cfg.get("channel_count", uart_sender.value_count), "runtime.uart_online.channel_count")
+    infer_channel_count = require_positive_int(
+        online_cfg.get("infer_channel_count", channel_count),
+        "runtime.uart_online.infer_channel_count",
+    )
+    if infer_channel_count > channel_count:
+        infer_channel_count = channel_count
+    postprocessor = create_runtime_postprocessor(cfg, channel_count=infer_channel_count)
+    full_gas_alarm = FullGasAlarmState(alarm_cfg)
+    idle_sleep_ms = int(online_cfg.get("idle_sleep_ms", 1))
+    log_every_n_frames = int(online_cfg.get("log_every_n_frames", 0))
+    warmup_send = bool(online_cfg.get("send_zeros_before_ready", False))
+    quiet = bool(online_cfg.get("quiet", False))
+    debug_predict_trace = bool(online_cfg.get("debug_predict_trace", False))
+    debug_uart_read_timing = bool(online_cfg.get("debug_uart_read_timing", False))
+    debug_outer_rx = bool(online_cfg.get("debug_outer_rx", False))
+    debug_outer_rx_only_abnormal = bool(online_cfg.get("debug_outer_rx_only_abnormal", False))
+    debug_outer_rx_interval_warn_ms = float(online_cfg.get("debug_outer_rx_interval_warn_ms", 25.0))
+    debug_tx_timing = bool(online_cfg.get("debug_tx_timing", False))
+    debug_tx_only_abnormal = bool(online_cfg.get("debug_tx_only_abnormal", True))
+    debug_tx_interval_min_warn_ms = float(online_cfg.get("debug_tx_interval_min_warn_ms", 180.0))
+    debug_tx_interval_max_warn_ms = float(online_cfg.get("debug_tx_interval_max_warn_ms", 240.0))
+    flush_rx_on_start = bool(online_cfg.get("flush_rx_on_start", True))
+    startup_flush_empty_rounds = int(online_cfg.get("startup_flush_empty_rounds", 3))
+    startup_flush_sleep_ms = int(online_cfg.get("startup_flush_sleep_ms", 10))
+    feature_mode = get_feature_mode(cfg)
+    model_type = get_model_type(cfg)
+    uses_raw_aux = model_type == "cnn_tcn_seg3_soft_stats_moe"
+    zero_guard_cfg = get_zero_guard_config(cfg)
+    zero_guard_enabled = bool(zero_guard_cfg.get("enabled", False))
+    zero_guard_output_value = float(zero_guard_cfg.get("output_value", 0.0))
+
+    input_value_type = str(online_cfg.get("input_value_type", uart_sender.value_type)).lower()
+    input_byte_order = str(online_cfg.get("input_byte_order", uart_sender.byte_order)).lower()
+    if uart_sender.outer_frame_enabled:
+        parser = UartBundledValueFrameParser(
+            outer_header=uart_sender.outer_header,
+            outer_tail=uart_sender.outer_tail,
+            inner_header=uart_sender.header,
+            inner_tail=uart_sender.tail,
+            value_count=channel_count,
+            value_type=input_value_type,
+            byte_order=input_byte_order,
+            outer_frame_count=uart_sender.outer_frame_count,
+        )
+    else:
+        parser = UartValueFrameParser(
+            header=uart_sender.header,
+            tail=uart_sender.tail,
+            value_count=channel_count,
+            value_type=input_value_type,
+            byte_order=input_byte_order,
+        )
+
+    mean, scale = load_scaler_params(scaler_json_path)
+    if len(mean) != window_size or len(scale) != window_size:
+        raise RuntimeError("scaler length mismatch: need {}, got mean={}, scale={}".format(window_size, len(mean), len(scale)))
+
+    nn, kpu, model_reloaded = ensure_kpu_cache(kmodel_path)
+
+    raw_ring = empty_float((infer_channel_count, window_size))
+    raw_write_idx = 0
+    raw_filled_frames = 0
+    raw_frames_since_emit = 0
+
+    seq_ring = empty_float((infer_channel_count, seq_length, window_size))
+    raw_seq_ring = empty_float((infer_channel_count, seq_length, window_size)) if uses_raw_aux else None
+    zero_seq_ring = empty_float((infer_channel_count, seq_length, window_size)) if zero_guard_enabled else None
+    seq_write_idx = 0
+    seq_filled = 0
+    seq_windows_since_infer = 0
+
+    total_rx_frames = 0
+    total_tx_frames = 0
+    base_window_count = 0
+    infer_round = 0
+
+    tmp_window = empty_float((window_size,))
+    tmp_feature = empty_float((window_size,))
+    tmp_scaled = empty_float((window_size,))
+    tmp_seq = empty_float((seq_length, window_size))
+    tmp_raw_seq = empty_float((seq_length, window_size)) if uses_raw_aux else None
+    tmp_zero_seq = empty_float((seq_length, window_size)) if zero_guard_enabled else None
+    sample3d = empty_float((1, seq_length, window_size))
+    raw_sample3d = empty_float((1, seq_length, window_size)) if uses_raw_aux else None
+
+    def online_print(*args):
+        if not quiet:
+            print(*args)
+
+    def send_zero_frame():
+        nonlocal total_tx_frames
+        uart_sender.send_values_frame([0.0] * int(uart_sender.value_count))
+        total_tx_frames += 1
+
+    online_print("uart_online_start: root={}".format(root))
+    online_print(
+        "uart_online_cfg: model_type={}, input_channels={}, infer_channels={}, output_values={}, window={}, base_step={}, sequence_length={}, sequence_step={}, input_type={}, input_order={}, model_reloaded={}".format(
+            get_model_type(cfg),
+            channel_count,
+            infer_channel_count,
+            int(uart_sender.value_count),
+            window_size,
+            base_step,
+            seq_length,
+            seq_step,
+            input_value_type,
+            input_byte_order,
+            bool(model_reloaded),
+        )
+    )
+    online_print("uart_online_feature_mode: {}".format(feature_mode))
+    online_print("uart_online_postprocessing: enabled={}, type={}".format(bool(postprocessor.enabled), postprocessor.kind))
+    online_print("uart_online_full_gas_alarm:", full_gas_alarm.summary())
+    online_print(
+        "uart_online_zero_guard: enabled={}, output_value={}, min_votes={}".format(
+            bool(zero_guard_enabled),
+            zero_guard_output_value,
+            int(zero_guard_cfg.get("min_votes", 3)),
+        )
+    )
+    if uart_sender.outer_frame_enabled:
+        online_print(
+            "uart_online_outer_frame_cfg: outer_frame_count={}, outer_header={}, outer_tail={}".format(
+                uart_sender.outer_frame_count,
+                " ".join("{:02X}".format(b) for b in uart_sender.outer_header),
+                " ".join("{:02X}".format(b) for b in uart_sender.outer_tail),
+            )
+        )
+    if flush_rx_on_start:
+        flushed_bytes = drain_uart_rx(
+            uart_sender.uart,
+            empty_rounds=startup_flush_empty_rounds,
+            sleep_between_ms=startup_flush_sleep_ms,
+        )
+        online_print(
+            "uart_online_startup_flush: enabled=True, flushed_bytes={}, empty_rounds={}, sleep_ms={}".format(
+                flushed_bytes,
+                startup_flush_empty_rounds,
+                startup_flush_sleep_ms,
+            )
+        )
+    else:
+        online_print("uart_online_startup_flush: enabled=False")
+
+    session_start_us = now_us()
+    first_rx_us = None
+    last_infer_trigger_us = None
+    last_uart_read_us = None
+    last_outer_rx_us = None
+    last_small_rx_us = None
+    last_tx_us = None
+
+    while True:
+        raw = uart_sender.uart.read()
+        rx_now_us = now_us()
+        if debug_uart_read_timing and not quiet:
+            read_interval_ms = -1.0
+            if last_uart_read_us is not None:
+                read_interval_ms = diff_us(rx_now_us, last_uart_read_us) / 1000.0
+            raw_len = 0
+            if raw:
+                raw_len = len(raw)
+            print(
+                "uart_online_read: ts_ms={:.3f}, interval_ms={:.3f}, raw_bytes={}, has_data={}".format(
+                    rx_now_us / 1000.0,
+                    read_interval_ms,
+                    raw_len,
+                    bool(raw),
+                )
+            )
+        last_uart_read_us = rx_now_us
+        if not raw:
+            sleep_ms(idle_sleep_ms)
+            continue
+
+        frames = parser.feed(raw)
+        if not frames:
+            continue
+
+        if uart_sender.outer_frame_enabled:
+            outer_count = int(uart_sender.outer_frame_count)
+            parsed_outer_frames = len(frames) // outer_count
+            if parsed_outer_frames > 0:
+                outer_interval_ms = -1.0
+                if last_outer_rx_us is not None:
+                    outer_interval_ms = diff_us(rx_now_us, last_outer_rx_us) / 1000.0
+                if debug_outer_rx:
+                    need_print_outer_rx = True
+                    if debug_outer_rx_only_abnormal:
+                        need_print_outer_rx = parsed_outer_frames > 1
+                        if not need_print_outer_rx and outer_interval_ms >= 0.0:
+                            need_print_outer_rx = outer_interval_ms >= debug_outer_rx_interval_warn_ms
+                    if need_print_outer_rx:
+                        online_print(
+                            "uart_online_outer_rx: ts_ms={:.3f}, outer_frame_idx={}, batch_outer_frames={}, interval_ms={:.3f}, raw_bytes={}, parsed_small_frames={}".format(
+                                rx_now_us / 1000.0,
+                                (total_rx_frames + len(frames)) // outer_count,
+                                parsed_outer_frames,
+                                outer_interval_ms,
+                                len(raw),
+                                len(frames),
+                            )
+                        )
+                last_outer_rx_us = rx_now_us
+        else:
+            small_interval_ms = -1.0
+            if last_small_rx_us is not None:
+                small_interval_ms = diff_us(rx_now_us, last_small_rx_us) / 1000.0
+            if debug_outer_rx:
+                need_print_small_rx = True
+                if debug_outer_rx_only_abnormal:
+                    need_print_small_rx = len(frames) > 1
+                    if not need_print_small_rx and small_interval_ms >= 0.0:
+                        need_print_small_rx = small_interval_ms >= debug_outer_rx_interval_warn_ms
+                if need_print_small_rx:
+                    online_print(
+                        "uart_online_small_rx: ts_ms={:.3f}, small_frame_idx={}, batch_small_frames={}, interval_ms={:.3f}, raw_bytes={}".format(
+                            rx_now_us / 1000.0,
+                            total_rx_frames + len(frames),
+                            len(frames),
+                            small_interval_ms,
+                            len(raw),
+                        )
+                    )
+            last_small_rx_us = rx_now_us
+
+        for values in frames:
+            total_rx_frames += 1
+            if first_rx_us is None:
+                first_rx_us = now_us()
+
+            for c in range(infer_channel_count):
+                raw_ring[c][raw_write_idx] = float(values[c])
+            raw_write_idx += 1
+            if raw_write_idx >= window_size:
+                raw_write_idx = 0
+
+            emit_base_window = False
+            first_base_window = False
+            if raw_filled_frames < window_size:
+                raw_filled_frames += 1
+                if raw_filled_frames >= window_size:
+                    emit_base_window = True
+                    first_base_window = True
+                    raw_frames_since_emit = 0
+                else:
+                    if warmup_send and uart_sender.enabled:
+                        send_zero_frame()
+                    continue
+            else:
+                raw_frames_since_emit += 1
+                if raw_frames_since_emit >= base_step:
+                    emit_base_window = True
+                    raw_frames_since_emit = 0
+                else:
+                    if warmup_send and uart_sender.enabled and seq_filled < seq_length:
+                        send_zero_frame()
+                    continue
+
+            if not emit_base_window:
+                continue
+
+            freq_total = 0.0
+            for c in range(infer_channel_count):
+                expand_ring_window(raw_ring[c], raw_write_idx, tmp_window)
+                freq_total += mean_1d(tmp_window)
+                if zero_guard_enabled:
+                    # 中文注释：0 干度保护必须使用未去均值的原始窗口，和 PC 端 zero_guard 保持一致。
+                    zero_seq_ring[c][seq_write_idx] = tmp_window
+                apply_feature_mode_1d(tmp_window, feature_mode, tmp_feature)
+                tmp_scaled[:] = (tmp_feature - mean) / scale
+                seq_ring[c][seq_write_idx] = tmp_scaled
+                if uses_raw_aux:
+                    raw_seq_ring[c][seq_write_idx] = tmp_feature
+
+            seq_write_idx += 1
+            if seq_write_idx >= seq_length:
+                seq_write_idx = 0
+            base_window_count += 1
+
+            first_seq_ready = False
+            if seq_filled < seq_length:
+                seq_filled += 1
+                if seq_filled >= seq_length:
+                    first_seq_ready = True
+                    seq_windows_since_infer = 0
+                else:
+                    if warmup_send and uart_sender.enabled:
+                        send_zero_frame()
+                    continue
+            else:
+                seq_windows_since_infer += 1
+                if seq_windows_since_infer < seq_step:
+                    if warmup_send and uart_sender.enabled:
+                        send_zero_frame()
+                    continue
+                seq_windows_since_infer = 0
+
+            raw_window_end = total_rx_frames
+            raw_window_start = raw_window_end - window_size + 1
+            seq_raw_start = raw_window_end - (window_size - 1) - (seq_length - 1) * base_step
+            if debug_predict_trace:
+                trigger_now_us = now_us()
+                elapsed_from_start_ms = diff_us(trigger_now_us, session_start_us) / 1000.0
+                elapsed_from_first_rx_ms = -1.0
+                if first_rx_us is not None:
+                    elapsed_from_first_rx_ms = diff_us(trigger_now_us, first_rx_us) / 1000.0
+                since_last_infer_ms = -1.0
+                if last_infer_trigger_us is not None:
+                    since_last_infer_ms = diff_us(trigger_now_us, last_infer_trigger_us) / 1000.0
+                online_print(
+                    "uart_online_trigger: infer_round_next={}, rx_small_frame_idx={}, base_window_idx={}, sequence_ready={}, first_base_window={}, first_sequence_ready={}, raw_window=[{}, {}], sequence_raw_start={}, elapsed_start_ms={:.3f}, elapsed_first_rx_ms={:.3f}, since_last_infer_ms={:.3f}".format(
+                        infer_round + 1,
+                        total_rx_frames,
+                        base_window_count,
+                        seq_filled >= seq_length,
+                        first_base_window,
+                        first_seq_ready,
+                        raw_window_start,
+                        raw_window_end,
+                        seq_raw_start,
+                        elapsed_from_start_ms,
+                        elapsed_from_first_rx_ms,
+                        since_last_infer_ms,
+                    )
+                )
+                last_infer_trigger_us = trigger_now_us
+
+            preds = []
+            zero_guard_hits = 0
+            t0 = now_us()
+            for c in range(infer_channel_count):
+                expand_sequence_ring(seq_ring[c], seq_write_idx, tmp_seq)
+                if zero_guard_enabled:
+                    expand_sequence_ring(zero_seq_ring[c], seq_write_idx, tmp_zero_seq)
+                    guard_hit, guard_votes, guard_features = is_zero_guard_hit(
+                        tmp_zero_seq,
+                        tmp_seq,
+                        zero_guard_cfg,
+                    )
+                    if guard_hit:
+                        pred = postprocessor.update(c, zero_guard_output_value, zero_guard_hit=True)
+                        preds.append(pred)
+                        zero_guard_hits += 1
+                        if debug_predict_trace and c < 3:
+                            online_print(
+                                "uart_online_zero_guard_hit: infer_round_next={}, channel={}, votes={}, features={}".format(
+                                    infer_round + 1,
+                                    c,
+                                    int(guard_votes),
+                                    {
+                                        "diff_p95_abs": round(float(guard_features.get("diff_p95_abs", 0.0)), 3),
+                                        "win_range_mean": round(float(guard_features.get("win_range_mean", 0.0)), 3),
+                                        "win_std_mean": round(float(guard_features.get("win_std_mean", 0.0)), 3),
+                                        "absz_mean": round(float(guard_features.get("absz_mean", 0.0)), 6),
+                                    },
+                                )
+                            )
+                        continue
+                sample3d[0] = tmp_seq
+                input_tensor = nn.from_numpy(sample3d)
+                kpu.set_input_tensor(0, input_tensor)
+                raw_input_tensor = None
+                if uses_raw_aux:
+                    expand_sequence_ring(raw_seq_ring[c], seq_write_idx, tmp_raw_seq)
+                    raw_sample3d[0] = tmp_raw_seq
+                    raw_input_tensor = nn.from_numpy(raw_sample3d)
+                    kpu.set_input_tensor(1, raw_input_tensor)
+                kpu.run()
+                output = kpu.get_output_tensor(0)
+                pred = float(output.to_numpy().reshape(-1)[0])
+                pred = postprocessor.update(c, pred)
+                preds.append(pred)
+                del output
+                del input_tensor
+                if raw_input_tensor is not None:
+                    del raw_input_tensor
+
+            send_vals = []
+            out_count = int(uart_sender.value_count)
+            for i in range(out_count):
+                if i < len(preds):
+                    send_vals.append(float(preds[i]))
+                else:
+                    send_vals.append(0.0)
+            write_full_gas_alarm_to_values(
+                send_vals,
+                full_gas_alarm,
+                preds,
+                freq_total / float(infer_channel_count),
+                zero_guard_hit=zero_guard_hits > 0,
+            )
+
+            tx_now_us = now_us()
+            tx_interval_ms = -1.0
+            if last_tx_us is not None:
+                tx_interval_ms = diff_us(tx_now_us, last_tx_us) / 1000.0
+            uart_sender.send_values_frame(send_vals)
+            total_tx_frames += 1
+            infer_round += 1
+            if debug_tx_timing:
+                need_print_tx = True
+                if debug_tx_only_abnormal:
+                    need_print_tx = False
+                    if tx_interval_ms >= 0.0:
+                        if tx_interval_ms < debug_tx_interval_min_warn_ms:
+                            need_print_tx = True
+                        elif tx_interval_ms > debug_tx_interval_max_warn_ms:
+                            need_print_tx = True
+                if need_print_tx:
+                    online_print(
+                        "uart_online_tx: ts_ms={:.3f}, tx_small_frame_idx={}, infer_round={}, interval_since_last_tx_ms={:.3f}, first3={}".format(
+                            tx_now_us / 1000.0,
+                            total_tx_frames,
+                            infer_round,
+                            tx_interval_ms,
+                            preds[:3],
+                        )
+                    )
+            last_tx_us = tx_now_us
+            infer_us = diff_us(now_us(), t0)
+            if debug_predict_trace:
+                online_print(
+                    "uart_online_result: infer_round={}, infer_ms={:.3f}, tx_small_frame_idx={}, zero_guard_hits={}, first3={}, full_gas_alarm={}, alarm_reason={}".format(
+                        infer_round,
+                        infer_us / 1000.0,
+                        total_tx_frames,
+                        zero_guard_hits,
+                        preds[:3],
+                        bool(full_gas_alarm.alarm_on) if full_gas_alarm.enabled else False,
+                        full_gas_alarm.last_reason,
+                    )
+                )
+
+            if log_every_n_frames > 0 and (total_rx_frames % log_every_n_frames) == 0:
+                online_print(
+                    "uart_online_stat: rx_frames={}, tx_frames={}, base_window_count={}, infer_round={}, infer_ms={:.3f}, zero_guard_hits={}, first3={}, full_gas_alarm={}".format(
+                        total_rx_frames,
+                        total_tx_frames,
+                        base_window_count,
+                        infer_round,
+                        infer_us / 1000.0,
+                        zero_guard_hits,
+                        preds[:3],
+                        bool(full_gas_alarm.alarm_on) if full_gas_alarm.enabled else False,
+                    )
+                )
+            if infer_round % 20 == 0:
+                gc.collect()
+
+
+def run_online_uart_inference(cfg, root, uart_sender, kmodel_path, scaler_json_path):
+    # 按配置中的模型类型自动分流在线推理逻辑。
+    model_type = get_model_type(cfg)
+    if model_type == "cnn":
+        return run_online_uart_inference_cnn(cfg, root, uart_sender, kmodel_path, scaler_json_path)
+    if model_type in {"cnn_lstm", "cnn_tcn", "cnn_tcn_seg3_soft_stats_moe"}:
+        return run_online_uart_inference_cnn_lstm(cfg, root, uart_sender, kmodel_path, scaler_json_path)
+    raise RuntimeError("Unsupported model.type for uart_online: {}".format(model_type))
 
 
 def run_uart_echo(root, cfg, uart_sender):
@@ -1745,6 +3017,24 @@ def write_predictions(path, y_true, y_pred):
         for i in range(len(y_pred)):
             f.write("{},{},{}\n".format(i, float(y_true[i]), float(y_pred[i])))
 
+def path_with_kmodel_name(output_path, kmodel_path):
+    # 板端输出文件统一带上 kmodel 文件名，避免多次测试结果混在一起分不清。
+    out_text = norm_path(output_path)
+    kmodel_name = norm_path(kmodel_path).split("/")[-1]
+    if "." in kmodel_name:
+        kmodel_name = kmodel_name.rsplit(".", 1)[0]
+
+    out_dir = dirname(out_text)
+    out_name = out_text.split("/")[-1]
+    if "." in out_name:
+        stem, ext = out_name.rsplit(".", 1)
+        final_name = stem + "__" + kmodel_name + "." + ext
+    else:
+        final_name = out_name + "__" + kmodel_name
+    if out_dir:
+        return join_path(out_dir, final_name)
+    return final_name
+
 
 def run_kmodel_inference(kmodel_path, X_scaled, uart_sender=None):
     # 旧版全量推理函数，当前主要保留作兼容与对照。
@@ -1811,7 +3101,9 @@ def safe_metric_rmse(y_true, y_pred):
 
 
 def detect_root():
-    # 依次尝试多个候选目录，找到实际的应用根目录。
+    # 中文注释：依次尝试多个候选目录，找到实际的应用根目录。
+    # 旧版本曾以 `k230_config.json` 作为根目录锚点，但现在配置已经迁移到 `configs/` 下，
+    # 如果继续找旧文件，板端很容易把 cwd 误判成 root，随后读取 `configs/*.json` 时触发 ENOENT。
     candidates = []
     try:
         candidates.append(norm_path(os.getcwd()))
@@ -1832,38 +3124,68 @@ def detect_root():
             seen.add(c)
             ordered.append(c)
     for c in ordered:
-        if exists(join_path(c, "k230_config.json")):
+        if (
+            exists(join_path(c, "run_k230_infer.py"))
+            and exists(join_path(c, "configs"))
+        ):
+            return c
+        if exists(join_path(c, "configs/auto_start_config.json")):
+            return c
+        if exists(join_path(c, "configs/k230_config_cnn_tcn.json")):
             return c
     return ordered[0] if ordered else "."
 
 
 def main():
+    # 统一入口：先读配置，再根据 runtime.mode 分流到不同模式。
+    # 平时切模式优先改 k230_config.json，不要直接改这里的分支。
     # 整个脚本的统一入口：
     # 先读取配置，再根据 runtime.mode 决定进入哪一种运行模式。
     root = detect_root()
-    cfg = load_json(join_path(root, "k230_config.json"))
+    cli_args = []
+    if sys is not None:
+        try:
+            cli_args = list(sys.argv[1:])
+        except Exception:
+            cli_args = []
+    config_path = resolve_runtime_config_path(root, cli_args)
+    cfg = load_json(config_path)
     paths = cfg["paths"]
     runtime_cfg = cfg.get("runtime", {})
-    uart_cfg = cfg.get("uart", {})
+    csv_cfg = get_runtime_section(runtime_cfg, "csv_cached")
+    mode = normalize_runtime_mode(runtime_cfg.get("mode", "csv_cached"))
+    uart_cfg = dict(cfg.get("uart", {}))
+    if mode == "uart_online":
+        online_cfg = get_runtime_section(runtime_cfg, "uart_online")
+        uart_cfg["quiet"] = bool(online_cfg.get("quiet", False))
     uart_sender = UartDrynessSender(uart_cfg)
-    mode = str(runtime_cfg.get("mode", "csv_cached")).lower()
-    max_samples = runtime_cfg.get("max_samples", None)
+    max_samples = csv_cfg.get("max_samples", runtime_cfg.get("max_samples", None))
     if max_samples is not None:
-        max_samples = require_positive_int(max_samples, "runtime.max_samples")
-    infer_batch_size = runtime_cfg.get("infer_batch_size", uart_cfg.get("value_count", 12))
-    infer_batch_size = require_positive_int(infer_batch_size, "runtime.infer_batch_size")
-    write_csv = bool(runtime_cfg.get("write_predictions_csv", False))
+        max_samples = require_positive_int(max_samples, "runtime.csv_cached.max_samples")
+    infer_batch_size = csv_cfg.get("infer_batch_size", runtime_cfg.get("infer_batch_size", uart_cfg.get("value_count", 12)))
+    infer_batch_size = require_positive_int(infer_batch_size, "runtime.csv_cached.infer_batch_size")
+    write_csv = bool(csv_cfg.get("write_predictions_csv", runtime_cfg.get("write_predictions_csv", False)))
 
     kmodel_path = join_path(root, paths["kmodel"])
     scaler_json_path = join_path(root, paths["scaler_json"])
     pred_csv = join_path(root, paths["predictions_csv"])
+    pred_csv = path_with_kmodel_name(pred_csv, kmodel_path)
+
+    # 启动时先打印当前模型信息，避免上板测试时分不清正在跑哪一版 kmodel。
+    print("=== K230 Runtime Model ===")
+    print("config_name:", cfg.get("name", ""))
+    print("config_path:", config_path)
+    print("mode:", mode)
+    print("kmodel:", kmodel_path)
+    print("scaler_json:", scaler_json_path)
+    print("predictions_csv:", pred_csv)
 
     # 运行模式说明：
     # 1. uart_online: 串口实时接收 12 路数据，满窗后做在线推理。
     # 2. uart_echo:   串口环路测试模式，收到什么就原样发回什么。
     # 3. uart_debug_ack: 每收到 1 个大帧就回 1 个调试 ACK 小帧。
     # 4. csv_cached:  用本地 CSV 做离线推理调试。
-    if mode in {"uart_online", "online_uart"}:
+    if mode == "uart_online":
         run_online_uart_inference(
             cfg=cfg,
             root=root,
@@ -1872,20 +3194,25 @@ def main():
             scaler_json_path=scaler_json_path,
         )
         return
-    if mode in {"uart_frame_return", "frame_return"}:
+    if mode == "uart_frame_return":
         run_uart_return_every_n_frames(root=root, cfg=cfg, uart_sender=uart_sender)
         return
-    if mode in {"uart_echo", "echo"}:
+    if mode == "uart_echo":
         # 当前大将军测试串口通断和环路时，走这个分支。
         # 这个模式完全不依赖模型、CSV、标准化参数。
         run_uart_echo(root=root, cfg=cfg, uart_sender=uart_sender)
         return
-    if mode in {"uart_debug_ack", "debug_ack", "ack"}:
+    if mode == "uart_debug_ack":
         run_uart_debug_ack(root=root, cfg=cfg, uart_sender=uart_sender)
         return
+    if mode != "csv_cached":
+        raise ValueError("Unsupported runtime.mode: " + str(mode))
 
     t_start = now_us()
     X_scaled, y_all, rebuilt = ensure_dataset_cache(cfg, root, max_samples, scaler_json_path)
+    X_raw_aux = None
+    if get_model_type(cfg) == "cnn_tcn_seg3_soft_stats_moe":
+        X_raw_aux = RUNTIME_CACHE.get("X_raw_aux", None)
     if rebuilt:
         print("dataset_cache_rebuilt_samples:", int(X_scaled.shape[0]))
     else:
@@ -1893,8 +3220,9 @@ def main():
 
     start_idx, count = acquire_infer_range(int(X_scaled.shape[0]), infer_batch_size)
     y_batch = collect_labels_range(y_all, start_idx, count)
+    postprocessor = create_runtime_postprocessor(cfg, channel_count=1)
     y_pred, infer_us, model_reloaded = run_kmodel_inference_cached(
-        kmodel_path, X_scaled, start_idx, count, uart_sender=uart_sender
+        kmodel_path, X_scaled, start_idx, count, uart_sender=uart_sender, X_raw_aux=X_raw_aux, postprocessor=postprocessor
     )
     if uart_sender.enabled:
         uart_sender.flush_pending()
@@ -1908,12 +3236,14 @@ def main():
 
     print("=== K230 Raw+CNN Inference ===")
     print("root:", root)
+    print("config_path:", config_path)
     print("mode:", mode)
     print("kmodel:", kmodel_path)
     print("dataset_total_samples:", int(X_scaled.shape[0]))
     print("infer_batch_size:", int(count))
     print("infer_start_idx:", int(start_idx))
     print("model_reloaded:", bool(model_reloaded))
+    print("postprocessing:", postprocessor.kind if postprocessor.enabled else "none")
     print("input_shape:", tuple(X_scaled.shape[1:]))
     print("model_infer_time_sec:", infer_us / 1_000_000.0)
     print("model_infer_time_per_sample_ms:", infer_us / 1000.0 / float(count))

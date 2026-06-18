@@ -1,0 +1,50 @@
+{
+  "name": "raw_cnn_pc_cnn_tcn_20260415_074057",
+  "data": {
+    "test_data_dir": "../data/new_data",
+    "base_window_size": 500,
+    "base_step": 200,
+    "sequence_length": 5,
+    "sequence_step": 1
+  },
+  "preprocessing": {
+    "feature_mode": "window_demean",
+    "filter_type": "none"
+  },
+  "model": {
+    "type": "CNN-TCN",
+    "cnn_tcn_conv_filters": [
+      16,
+      32
+    ],
+    "cnn_tcn_kernel_size": [
+      5,
+      3
+    ],
+    "cnn_tcn_pool_size": [
+      2,
+      2
+    ],
+    "cnn_tcn_num_channels": [
+      32,
+      32,
+      48
+    ],
+    "cnn_tcn_tcn_kernel_size": 3,
+    "cnn_tcn_dilations": [
+      1,
+      2,
+      4
+    ],
+    "cnn_tcn_dropout": 0.0,
+    "weights_path": "model/cnn-tcn/train_model_bundle_cnn_tcn_20260415_074057/cnn_tcn.pth"
+  },
+  "normalization": {
+    "type": "StandardScaler",
+    "scaler_path": "model/cnn-tcn/train_model_bundle_cnn_tcn_20260415_074057/scaler.pkl"
+  },
+  "runtime": {
+    "device": "cpu",
+    "max_samples": null
+  }
+}

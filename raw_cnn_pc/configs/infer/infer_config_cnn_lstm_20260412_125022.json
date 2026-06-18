@@ -1,0 +1,48 @@
+{
+  "__comment_file_purpose": "大将军，这个文件是新加入的 20260412_125022 版 CNN-LSTM 模型的 PC 侧推理配置。属下把它单独拆出来，是为了避免覆盖旧版 20260320 / 20260410 的配置，后续做 .pth、kmodel、量化方案对比时更清楚。",
+  "__comment_when_to_use": [
+    "当要在 PC 侧直接评估这套新模型的 .pth 推理效果时，使用这份配置。",
+    "当 compare_pth_kmodel.py 需要读取这套模型结构、权重、scaler 路径时，使用这份配置。",
+    "当后续量化方案评估脚本需要把 .pth 作为浮点基线时，也使用这份配置。"
+  ],
+  "__comment_key_points": [
+    "这个文件只负责 PC 侧推理与对比，不负责导出 kmodel。",
+    "weights_path 和 scaler_path 直接指向新 bundle 目录，不会覆盖旧文件。",
+    "数据预处理保持和 meta.json 一致：window_demean + StandardScaler + seq_length=5。"
+  ],
+  "name": "raw_cnn_pc_cnn_lstm_20260412_125022",
+  "data": {
+    "test_data_dir": "test_data",
+    "base_window_size": 500,
+    "base_step": 200,
+    "sequence_length": 5,
+    "sequence_step": 2
+  },
+  "preprocessing": {
+    "feature_mode": "window_demean",
+    "filter_type": "none"
+  },
+  "model": {
+    "type": "CNN-LSTM",
+    "cnn_lstm_conv_filters": [
+      16,
+      32
+    ],
+    "cnn_lstm_kernel_size": 3,
+    "cnn_lstm_pool_size": 2,
+    "cnn_lstm_units": 50,
+    "lstm_hidden_size": 64,
+    "lstm_num_layers": 1,
+    "lstm_dropout": 0.0,
+    "lstm_bidirectional": false,
+    "weights_path": "model/cnn-lstm/train_model_bundle_cnn_lstm_20260412_125022/cnn_lstm.pth"
+  },
+  "normalization": {
+    "type": "StandardScaler",
+    "scaler_path": "model/cnn-lstm/train_model_bundle_cnn_lstm_20260412_125022/scaler.pkl"
+  },
+  "runtime": {
+    "device": "cpu",
+    "max_samples": null
+  }
+}

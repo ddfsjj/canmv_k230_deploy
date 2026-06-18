@@ -1,0 +1,32 @@
+{
+  "name": "raw_cnn_pc_cnn",
+  "data": {
+    "test_data_dir": "data/880k_data_260414",
+    "base_window_size": 500,
+    "base_step": 200,
+    "sequence_length": 1,
+    "sequence_step": 1
+  },
+  "preprocessing": {
+    "feature_mode": "window_demean",
+    "filter_type": "none"
+  },
+  "model": {
+    "type": "CNN",
+    "conv_filters": [
+      16,
+      32
+    ],
+    "kernel_size": 3,
+    "pool_size": 2,
+    "weights_path": "model/cnn/cnn_all_20260423_064422.pth"
+  },
+  "normalization": {
+    "type": "StandardScaler",
+    "scaler_path": "model/cnn/scaler_20260423_064422.pkl"
+  },
+  "runtime": {
+    "device": "cpu",
+    "max_samples": null
+  }
+}

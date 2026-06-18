@@ -1,0 +1,281 @@
+{
+  // 配置名称，仅用于区分当前这份运行时配置，不参与推理逻辑。
+  "name": "raw_cnn_k230_runtime",
+
+  "paths": {
+    // K230 板端加载的 kmodel 文件，相对当前配置文件所在目录。
+    "kmodel": "model/cnn_tcn_20260414_013210.kmodel",
+
+    // 与 kmodel 配套的标准化参数 json。
+    // 在线模式和离线 csv_cached 模式都会用它做特征标准化。
+    "scaler_json": "model/scaler_cnn_tcn_20260414_013210.json",
+
+    // 离线 CSV 模式读取测试数据的目录。
+    // 只有 csv_cached / run_k230_csv_compare.py 会使用。
+    "test_data_dir": "test_data",
+
+    // 板端离线推理时，可选输出的预测结果 CSV 文件名。
+    "predictions_csv": "predictions_cnn_tcn_k230.csv"
+  },
+
+  "model": {
+    // 当前模型类型。
+    // 支持：
+    // 1. "cnn"      -> 单窗口在线逻辑
+    // 2. "cnn_lstm" -> 序列窗口在线逻辑
+    // 当前默认跑的是 cnn_tcn。
+    "type": "cnn_tcn"
+  },
+
+  "data": {
+    // 基础滑动窗口长度，单位是“小帧数”。
+    // 当前每收到 1 个小帧，就相当于获得 1 个时间步的 12 路输入。
+    "base_window_size": 500,
+
+    // 基础窗口步长。
+    // 对 cnn_lstm 在线模式来说，每累计 200 个新小帧，就生成 1 个新的基础窗口。
+    "base_step": 200,
+
+    // 序列长度。
+    // 当前 cnn_lstm 每次推理输入形状为 (1, 5, 500)。
+    "sequence_length": 5,
+
+    // 序列步长。
+    // 当前序列满了以后，每新增 2 个基础窗口，再触发一次推理。
+    // 当前值为 1，表示序列满后每新增 1 个基础窗口就再次推理一次。
+    "sequence_step": 1
+  },
+
+  "preprocessing": {
+    // 特征预处理模式。
+    // window_demean 表示每个窗口先减去自身均值，再做标准化。
+    "feature_mode": "window_demean",
+
+    // 预留滤波字段，当前保持 none。
+    "filter_type": "none"
+  },
+
+  "runtime": {
+    // 当前运行模式。
+    // 可选：
+    // 1. uart_online       -> 在线串口推理
+    // 2. uart_frame_return -> 按帧计数回传测试
+    // 3. uart_echo         -> 收到什么回什么
+    // 4. uart_debug_ack    -> 调试 ACK 模式
+    // 5. csv_cached        -> 本地 CSV 离线推理
+    "mode": "uart_online",
+
+    "csv_cached": {
+      // 离线 CSV 模式最多跑多少条样本。
+      // null 表示不限制，按全量运行。
+      "max_samples": null,
+
+      // run_k230_csv_compare.py 默认取多少条样本做离线对比。
+      "compare_max_samples": null,
+
+      // 离线 CSV 模式每轮实际推理多少条样本。
+      "infer_batch_size": 12,
+
+      // 是否把离线预测结果额外写到 CSV 文件。
+      "write_predictions_csv": true
+    },
+
+    "uart_frame_return": {
+      // 收到多少个“大帧”后回传一次。
+      "return_every_n_frames": 1,
+
+      // 串口空闲时轮询等待时间，单位 ms。
+      "idle_sleep_ms": 1,
+
+      // 每收到多少个大帧打印一次统计日志。
+      "log_every_n_frames": 100,
+
+      // 是否把收发帧按十六进制打印出来。
+      "print_hex": false,
+
+      // true 表示严格按当前帧头帧尾和小帧结构解析。
+      "strict_protocol": true,
+
+      // 非严格协议模式下使用的固定大帧长度。
+      // 当前 1 个大帧 = 20 个小帧，因此长度是 2 + 20*52 + 2 = 1044 字节。
+      "fixed_frame_len": 1044,
+
+      // 当外层大帧开启时：
+      // true  -> 只回大帧中的 1 个小帧
+      // false -> 原样回整个大帧
+      "return_inner_frame_when_outer_enabled": true,
+
+      // 当上面为 true 时生效。
+      // -1 表示回最后 1 个小帧。
+      "return_inner_frame_index": -1
+    },
+
+    "uart_echo": {
+      // 串口回环模式空闲时轮询等待时间。
+      "idle_sleep_ms": 1,
+
+      // 每收到多少个数据包打印一次统计。
+      "log_every_n_packets": 20,
+
+      // 是否把收到的原始字节按十六进制打印出来。
+      "print_hex": false
+    },
+
+    "uart_debug_ack": {
+      // ACK 模式空闲时轮询等待时间。
+      "idle_sleep_ms": 1,
+
+      // 每收到多少个大帧打印一次统计。
+      "log_every_n_frames": 20,
+
+      // 是否打印原始大帧十六进制内容。
+      "print_hex": false,
+
+      // true 表示严格按当前协议解析大帧。
+      "strict_protocol": true,
+
+      // 非严格协议模式下使用的固定大帧长度。
+      "fixed_frame_len": 1044,
+
+      // 启动时是否先清空一次串口接收缓冲，避免旧数据残留。
+      "flush_rx_on_start": true,
+
+      // 启动清空缓冲时，连续多少轮读不到数据才算完成。
+      "startup_flush_empty_rounds": 3,
+
+      // 启动清空缓冲时，两轮轮询之间等待多少 ms。
+      "startup_flush_sleep_ms": 10,
+
+      // ACK 小帧里的魔术字。
+      "ack_magic": 9001
+    },
+
+    "uart_online": {
+      // 每个小帧里有多少路输入值。
+      "channel_count": 12,
+
+      // 兼容旧版 cnn 在线逻辑保留的字段。
+      // 对当前 cnn_lstm 在线模式，真正的触发节奏由
+      // data.base_step / data.sequence_length / data.sequence_step 决定。
+      // 这个字段主要给旧版单窗 cnn 在线逻辑保留；当前 cnn_tcn 真实触发节奏看 data.*。
+      "infer_step_frames": 200,
+
+      // 输入小帧中每个值的解码类型。
+      "input_value_type": "int32",
+
+      // 输入小帧中每个值的字节序。
+      "input_byte_order": "big",
+
+      // 是否压制在线日志。
+      // false 表示打印联调日志。
+      "quiet": false,
+
+      // 串口空闲时轮询等待时间，单位 ms。
+      "idle_sleep_ms": 1,
+
+      // 每收到多少个小帧打印一次周期统计日志。
+      // 仅控制日志频率，不决定推理时机。
+      "log_every_n_frames": 200,
+
+      // 在序列尚未准备好之前，是否也向外回 0 占位结果。
+      // 联调阶段建议保持 true，方便确认串口链路和预热过程。
+      // 当前默认 false，序列没准备好之前不发送占位结果。
+      "send_zeros_before_ready": false,
+
+      // 是否打印更详细的推理触发和结果日志。
+      "debug_predict_trace": true,
+
+      // 是否打印每次 uart.read() 的读包时序。
+      // 打开后日志很多，联调排障时再用。
+      "debug_uart_read_timing": false,
+
+      // 是否打印外层大帧接收日志。
+      "debug_outer_rx": true,
+
+      // 是否只在异常情况下打印外层接收日志。
+      "debug_outer_rx_only_abnormal": false,
+
+      // 判断外层接收间隔异常的阈值，单位 ms。
+      "debug_outer_rx_interval_warn_ms": 25.0,
+
+      // 是否打印发送时序日志。
+      "debug_tx_timing": false,
+
+      // 是否仅在发送时序异常时打印日志。
+      "debug_tx_only_abnormal": true,
+
+      // 发送间隔过短报警阈值，单位 ms。
+      "debug_tx_interval_min_warn_ms": 180.0,
+
+      // 发送间隔过长报警阈值，单位 ms。
+      "debug_tx_interval_max_warn_ms": 240.0,
+
+      // 启动时是否先清空串口接收缓冲。
+      "flush_rx_on_start": true,
+
+      // 启动清空缓冲时，连续多少轮没读到数据才算清空完成。
+      "startup_flush_empty_rounds": 3,
+
+      // 启动清空缓冲时，两次轮询之间等待多少 ms。
+      "startup_flush_sleep_ms": 10
+    }
+  },
+
+  "uart": {
+    // 是否启用 UART。
+    "enabled": true,
+
+    // 使用哪一路 UART 外设。
+    "uart_id": 2,
+
+    // UART TX 对应的物理引脚编号。
+    "tx_pin": 11,
+
+    // UART RX 对应的物理引脚编号。
+    "rx_pin": 12,
+
+    // 波特率。
+    "baudrate": 921600,
+
+    // 数据位。
+    "bits": 8,
+
+    // 校验位。
+    "parity": "none",
+
+    // 停止位。
+    "stop": 1,
+
+    // 回传预测结果时使用的放大倍数。
+    // 例如预测值 1.2345，在 int32 输出模式下会先乘这个比例再发送。
+    "predict_scale": 10000,
+
+    // K230 回传值的类型。
+    "value_type": "int32",
+
+    // K230 回传值的字节序。
+    "byte_order": "big",
+
+    // 每个小帧中包含多少个数值。
+    "value_count": 12,
+
+    // 小帧帧头。
+    "header": [85, 170],
+
+    // 小帧帧尾。
+    "tail": [252, 207],
+
+    // 是否启用外层大帧封装。
+    "outer_frame_enabled": true,
+
+    // 每个大帧中包含多少个小帧。
+    // 当前 1 个大帧 = 20 个小帧，对应 fixed_frame_len = 1044 字节。
+    "outer_frame_count": 20,
+
+    // 大帧帧头。
+    "outer_header": [247, 127],
+
+    // 大帧帧尾。
+    "outer_tail": [250, 175]
+  }
+}
