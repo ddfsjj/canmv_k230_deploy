@@ -342,17 +342,20 @@ HTML = r"""<!doctype html>
   <title>Raw CNN K230 工作台</title>
   <style>
     :root {
-      --bg: #f4f6f8;
+      --bg: #eef2f6;
       --panel: #ffffff;
-      --line: #d9e0e7;
-      --text: #18212b;
-      --muted: #657384;
-      --primary: #1769aa;
-      --primary-strong: #0f4f86;
+      --panel-soft: #f8fafc;
+      --line: #d7dee8;
+      --line-strong: #b9c6d4;
+      --text: #17202a;
+      --muted: #6b7787;
+      --primary: #1a6fb3;
+      --primary-strong: #0d4e86;
+      --primary-soft: #e7f1fb;
       --ok: #16794c;
       --bad: #b42318;
       --warn: #a15c00;
-      --shadow: 0 10px 28px rgba(20, 35, 50, .08);
+      --shadow: 0 16px 36px rgba(28, 43, 58, .10);
     }
     * { box-sizing: border-box; }
     body {
@@ -361,73 +364,230 @@ HTML = r"""<!doctype html>
       color: var(--text);
       background: var(--bg);
     }
+    .app-shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+    }
     header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 18px 28px;
-      background: #ffffff;
+      gap: 16px;
+      padding: 18px 24px;
+      background: rgba(255, 255, 255, .92);
       border-bottom: 1px solid var(--line);
       position: sticky;
       top: 0;
       z-index: 3;
+      backdrop-filter: blur(10px);
     }
-    h1 { font-size: 20px; margin: 0; letter-spacing: 0; }
+    h1 { font-size: 22px; margin: 0; letter-spacing: 0; }
     .sub { color: var(--muted); font-size: 13px; margin-top: 4px; }
+    .header-actions { display: flex; align-items: center; gap: 10px; }
+    .sidebar {
+      min-height: 100vh;
+      padding: 22px 14px;
+      background: #111820;
+      color: #e8eef5;
+      position: sticky;
+      top: 0;
+      align-self: start;
+    }
+    .brand {
+      padding: 4px 8px 18px;
+      border-bottom: 1px solid rgba(255,255,255,.12);
+      margin-bottom: 14px;
+    }
+    .brand .name { font-size: 18px; font-weight: 700; }
+    .brand .meta { color: #9aa8b7; font-size: 12px; margin-top: 5px; }
+    .nav-label {
+      color: #9aa8b7;
+      font-size: 12px;
+      padding: 10px 8px 8px;
+    }
+    .tab {
+      width: 100%;
+      border: 1px solid transparent;
+      background: transparent;
+      color: #c9d4df;
+      text-align: left;
+      padding: 12px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      margin-bottom: 6px;
+    }
+    .tab.active {
+      background: #223346;
+      border-color: #344a61;
+      color: #fff;
+      font-weight: 650;
+    }
+    .tab:hover { background: #1a2633; color: #fff; }
+    .main-pane { min-width: 0; }
     main {
-      display: grid;
-      grid-template-columns: 270px minmax(0, 1fr);
-      gap: 18px;
-      padding: 18px;
-      max-width: 1500px;
+      padding: 18px 22px 28px;
+      max-width: 1680px;
       margin: 0 auto;
     }
-    .sidebar, .content, .panel {
+    .content {
+      min-height: calc(100vh - 100px);
+    }
+    .resource-strip {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(120px, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .resource-card,
+    .form-card,
+    .result-card,
+    .scan-group,
+    .status {
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
       box-shadow: var(--shadow);
     }
-    .sidebar { padding: 12px; height: fit-content; position: sticky; top: 78px; }
-    .tab {
-      width: 100%;
-      border: 0;
-      background: transparent;
-      color: var(--text);
-      text-align: left;
-      padding: 11px 12px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 14px;
-      margin-bottom: 4px;
+    .resource-card {
+      padding: 12px 14px;
+      min-height: 78px;
+      box-shadow: none;
     }
-    .tab.active { background: #e9f2fb; color: var(--primary-strong); font-weight: 600; }
-    .content { padding: 18px; min-height: 720px; }
+    .resource-card .label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+    .resource-card .num {
+      font-size: 24px;
+      font-weight: 750;
+      line-height: 1;
+    }
     .section { display: none; }
-    .section.active { display: block; }
-    .section h2 { font-size: 18px; margin: 0 0 14px; }
+    .section.active {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(360px, .65fr);
+      gap: 14px 16px;
+      align-items: start;
+    }
+    .section-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 14px;
+      margin: 12px 0 14px;
+    }
+    .section h2 {
+      grid-column: 1 / -1;
+      font-size: 21px;
+      margin: 0;
+    }
+    .section-kicker {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 5px;
+    }
+    .workspace-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(360px, .65fr);
+      gap: 16px;
+      align-items: start;
+    }
+    .form-stack {
+      display: grid;
+      gap: 12px;
+      min-width: 0;
+    }
+    .form-card,
+    .result-card,
+    .scan-group {
+      padding: 16px;
+    }
+    .panel {
+      grid-column: 1;
+      grid-row: 2 / span 4;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 16px;
+      min-width: 0;
+    }
+    .panel::before {
+      content: "参数";
+      grid-column: 1 / -1;
+      display: block;
+      padding-bottom: 10px;
+      margin-bottom: 4px;
+      border-bottom: 1px solid var(--line);
+      font-size: 14px;
+      font-weight: 700;
+    }
+    #infer .panel::before { content: "预测参数"; }
+    #export .panel::before { content: "生成参数"; }
+    #compare .panel::before { content: "对比参数"; }
+    .card-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line);
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .result-card {
+      position: sticky;
+      top: 88px;
+      box-shadow: var(--shadow);
+    }
     .grid {
       display: grid;
       grid-template-columns: repeat(12, minmax(0, 1fr));
-      gap: 12px;
+      gap: 12px 14px;
     }
-    .field { grid-column: span 4; min-width: 0; }
-    .field.wide { grid-column: span 8; }
+    .field { grid-column: span 3; min-width: 0; }
+    .field.wide { grid-column: span 6; }
     .field.full { grid-column: 1 / -1; }
-    label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 5px; }
+    label {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin: 0 0 6px;
+    }
     select, input {
       width: 100%;
-      min-height: 36px;
+      min-height: 38px;
       border: 1px solid var(--line);
       border-radius: 6px;
-      padding: 7px 9px;
+      padding: 7px 10px;
       font-size: 13px;
       color: var(--text);
       background: #fff;
     }
+    select:hover, input:hover { border-color: var(--line-strong); }
     select:focus, input:focus { outline: 2px solid #b8d7f0; border-color: var(--primary); }
-    .panel { padding: 14px; margin: 14px 0; box-shadow: none; }
-    .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    .section > .actions {
+      grid-column: 2;
+      grid-row: 2;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 16px;
+    }
+    .section > .actions::before {
+      content: "执行";
+      flex-basis: 100%;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line);
+      font-size: 14px;
+      font-weight: 700;
+    }
     button.primary, button.secondary {
       border: 1px solid var(--primary);
       border-radius: 6px;
@@ -439,14 +599,13 @@ HTML = r"""<!doctype html>
     button.primary { color: #fff; background: var(--primary); }
     button.primary:hover { background: var(--primary-strong); }
     button.secondary { color: var(--primary-strong); background: #fff; }
+    button.secondary:hover { background: var(--primary-soft); }
     .status {
-      border-radius: 6px;
       padding: 10px 12px;
-      background: #f7f9fb;
-      border: 1px solid var(--line);
       color: var(--muted);
       font-size: 13px;
-      margin: 12px 0;
+      margin-bottom: 14px;
+      box-shadow: none;
     }
     .status.ok { border-color: #a9d8bf; color: var(--ok); background: #f1fbf5; }
     .status.bad { border-color: #f0b8b2; color: var(--bad); background: #fff5f4; }
@@ -459,44 +618,127 @@ HTML = r"""<!doctype html>
       max-height: 360px;
       font-size: 12px;
       line-height: 1.45;
+      margin: 12px 0 0;
     }
-    .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    .cards {
+      grid-column: 2;
+      grid-row: 3;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 0;
+    }
     .metric {
       border: 1px solid var(--line);
       border-radius: 8px;
-      padding: 12px;
+      padding: 11px;
       background: #fbfcfd;
-      min-height: 74px;
+      min-height: 70px;
     }
     .metric .name { color: var(--muted); font-size: 12px; }
-    .metric .value { margin-top: 8px; font-size: 18px; font-weight: 700; overflow-wrap: anywhere; }
-    .hint { color: var(--muted); font-size: 13px; line-height: 1.55; }
-    .path-list { font-size: 12px; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; }
-    @media (max-width: 980px) {
-      main { grid-template-columns: 1fr; }
-      .sidebar { position: static; }
+    .metric .value {
+      margin-top: 8px;
+      font-size: 15px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+    .scan-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .scan-title {
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+    .scan-row {
+      padding: 8px 0;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    .hint { display: none; }
+    .section > pre {
+      grid-column: 2;
+      grid-row: 4;
+    }
+    #scan.active {
+      grid-template-columns: 1fr;
+    }
+    #scan.active h2,
+    #scan.active .panel {
+      grid-column: 1;
+      grid-row: auto;
+    }
+    @media (max-width: 1180px) {
+      .app-shell { grid-template-columns: 1fr; }
+      .sidebar {
+        min-height: auto;
+        position: static;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        overflow-x: auto;
+      }
+      .brand, .nav-label { display: none; }
+      .tab { white-space: nowrap; width: auto; margin: 0; }
+      .workspace-grid,
+      .section.active { grid-template-columns: 1fr; }
+      .section .panel,
+      .section > .actions,
+      .section > .cards,
+      .section > pre {
+        grid-column: 1;
+        grid-row: auto;
+      }
+      .result-card { position: static; }
+      .resource-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 760px) {
+      header { align-items: flex-start; flex-direction: column; }
+      main { padding: 14px; }
+      .resource-strip, .scan-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .field, .field.wide { grid-column: 1 / -1; }
       .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
   </style>
 </head>
 <body>
-  <header>
-    <div>
-      <h1>Raw CNN K230 工作台</h1>
-      <div class="sub">PC 推理、KModel 生成、PTH vs KModel 对比。不会修改板端配置。</div>
-    </div>
-    <button class="secondary" onclick="scan()">重新扫描</button>
-  </header>
-  <main>
+  <div class="app-shell">
     <aside class="sidebar">
+      <div class="brand">
+        <div class="name">Raw CNN K230</div>
+        <div class="meta">本地模型工作台</div>
+      </div>
+      <div class="nav-label">工作流</div>
       <button class="tab active" data-tab="infer">PTH 预测</button>
       <button class="tab" data-tab="export">KModel 生成</button>
       <button class="tab" data-tab="compare">PTH vs KModel</button>
       <button class="tab" data-tab="scan">扫描结果</button>
     </aside>
-    <section class="content">
-      <div id="status" class="status">正在扫描项目文件...</div>
+    <div class="main-pane">
+      <header>
+        <div>
+          <h1>模型工作台</h1>
+          <div class="sub">PC 推理、KModel 生成、PTH vs KModel 对比</div>
+        </div>
+        <div class="header-actions">
+          <button class="secondary" onclick="scan()">重新扫描</button>
+        </div>
+      </header>
+      <main>
+        <section class="content">
+          <div class="resource-strip">
+            <div class="resource-card"><div class="label">PTH</div><div id="stat_pth" class="num">0</div></div>
+            <div class="resource-card"><div class="label">scaler</div><div id="stat_scaler" class="num">0</div></div>
+            <div class="resource-card"><div class="label">KModel</div><div id="stat_kmodel" class="num">0</div></div>
+            <div class="resource-card"><div class="label">数据目录</div><div id="stat_data" class="num">0</div></div>
+            <div class="resource-card"><div class="label">推理配置</div><div id="stat_infer_cfg" class="num">0</div></div>
+            <div class="resource-card"><div class="label">导出配置</div><div id="stat_export_cfg" class="num">0</div></div>
+          </div>
+          <div id="status" class="status">正在扫描项目文件...</div>
 
       <div id="infer" class="section active">
         <h2>PTH 预测</h2>
@@ -584,8 +826,10 @@ HTML = r"""<!doctype html>
           <div class="path-list" id="scan_result"></div>
         </div>
       </div>
-    </section>
-  </main>
+        </section>
+      </main>
+    </div>
+  </div>
   <script>
     const modelTypes = ["CNN-All", "CNN-LSTM", "CNN-TCN", "cnn_tcn_seg3_soft_stats_moe"];
     const featureModes = ["raw", "window_demean", "window_rel_demean"];
@@ -636,6 +880,20 @@ HTML = r"""<!doctype html>
       fillOptions("export_calibrate_method", calibrateMethods);
     }
 
+    function setText(id, value) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = value;
+    }
+
+    function updateStats() {
+      setText("stat_pth", scanData.pth_files.length);
+      setText("stat_scaler", scanData.scaler_files.length);
+      setText("stat_kmodel", scanData.kmodel_files.length);
+      setText("stat_data", scanData.data_dirs.length);
+      setText("stat_infer_cfg", scanData.infer_configs.length);
+      setText("stat_export_cfg", scanData.export_configs.length);
+    }
+
     async function scan() {
       status("正在扫描项目文件...");
       const res = await fetch("/api/scan");
@@ -648,6 +906,7 @@ HTML = r"""<!doctype html>
       ["infer_scaler", "export_scaler", "compare_scaler"].forEach(id => fillOptions(id, scanData.scaler_files));
       ["infer_data", "export_data", "compare_data"].forEach(id => fillOptions(id, scanData.data_dirs.map(x => ({label: `${x.label} (${x.csv_count} CSV)`, value: x.value}))));
       fillOptions("compare_kmodel", scanData.kmodel_files);
+      updateStats();
       renderScan();
       status(`扫描完成：${scanData.pth_files.length} 个 PTH，${scanData.scaler_files.length} 个 scaler，${scanData.kmodel_files.length} 个 KModel。`, "ok");
     }
@@ -661,10 +920,10 @@ HTML = r"""<!doctype html>
         ["导出配置", scanData.export_configs],
         ["数据目录", scanData.data_dirs],
       ];
-      document.getElementById("scan_result").innerHTML = parts.map(([title, items]) => {
-        const rows = items.map(x => `&nbsp;&nbsp;${x.label}${x.csv_count ? ` (${x.csv_count} CSV)` : ""}`).join("<br>");
-        return `<strong>${title} (${items.length})</strong><br>${rows || "&nbsp;&nbsp;无"}`;
-      }).join("<br><br>");
+      document.getElementById("scan_result").innerHTML = `<div class="scan-grid">${parts.map(([title, items]) => {
+        const rows = items.map(x => `<div class="scan-row">${x.label}${x.csv_count ? ` (${x.csv_count} CSV)` : ""}</div>`).join("");
+        return `<div class="scan-group"><div class="scan-title">${title} (${items.length})</div>${rows || '<div class="scan-row">无</div>'}</div>`;
+      }).join("")}</div>`;
     }
 
     function payload(prefix) {
