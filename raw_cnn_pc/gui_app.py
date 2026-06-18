@@ -32,7 +32,7 @@ def rel_label(path: Path) -> str:
 def file_item(path: Path):
     return {
         "label": rel_label(path),
-        "value": str(path.resolve()),
+        "value": as_posix(path),
         "name": path.name,
     }
 
@@ -86,6 +86,31 @@ def scan_files():
 def load_json_file(path: Path):
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def resolve_ui_path(value):
+    if not value:
+        return ""
+    path = Path(value)
+    if not path.is_absolute():
+        path = ROOT / path
+    return as_posix(path)
+
+
+def load_config_for_ui(path: Path):
+    cfg = load_json_file(path)
+    paths = cfg.get("paths", {})
+    return {
+        "config": cfg,
+        "resolved": {
+            "test_data_dir": resolve_ui_path(cfg.get("data", {}).get("test_data_dir")),
+            "weights_path": resolve_ui_path(cfg.get("model", {}).get("weights_path") or paths.get("weights_pth")),
+            "scaler_path": resolve_ui_path(cfg.get("normalization", {}).get("scaler_path") or paths.get("scaler_pkl")),
+            "calibration_data_dir": resolve_ui_path(paths.get("calibration_data_dir")),
+            "export_test_data_dir": resolve_ui_path(paths.get("test_data_dir")),
+            "kmodel": resolve_ui_path(paths.get("kmodel")),
+        },
+    }
 
 
 def save_json_file(path: Path, payload):
@@ -342,20 +367,20 @@ HTML = r"""<!doctype html>
   <title>Raw CNN K230 工作台</title>
   <style>
     :root {
-      --bg: #eef2f6;
+      --bg: #f3f5f7;
       --panel: #ffffff;
-      --panel-soft: #f8fafc;
-      --line: #d7dee8;
-      --line-strong: #b9c6d4;
-      --text: #17202a;
-      --muted: #6b7787;
-      --primary: #1a6fb3;
-      --primary-strong: #0d4e86;
-      --primary-soft: #e7f1fb;
-      --ok: #16794c;
+      --panel-soft: #f7faf9;
+      --line: #dce3e1;
+      --line-strong: #b9c8c5;
+      --text: #1b2426;
+      --muted: #6f7c7b;
+      --primary: #28746f;
+      --primary-strong: #1d5c58;
+      --primary-soft: #e4f3f1;
+      --ok: #23754f;
       --bad: #b42318;
       --warn: #a15c00;
-      --shadow: 0 16px 36px rgba(28, 43, 58, .10);
+      --shadow: 0 14px 32px rgba(35, 48, 52, .08);
     }
     * { box-sizing: border-box; }
     body {
@@ -388,21 +413,22 @@ HTML = r"""<!doctype html>
     .sidebar {
       min-height: 100vh;
       padding: 22px 14px;
-      background: #111820;
-      color: #e8eef5;
+      background: #fbfcfc;
+      border-right: 1px solid var(--line);
+      color: var(--text);
       position: sticky;
       top: 0;
       align-self: start;
     }
     .brand {
       padding: 4px 8px 18px;
-      border-bottom: 1px solid rgba(255,255,255,.12);
+      border-bottom: 1px solid var(--line);
       margin-bottom: 14px;
     }
     .brand .name { font-size: 18px; font-weight: 700; }
-    .brand .meta { color: #9aa8b7; font-size: 12px; margin-top: 5px; }
+    .brand .meta { color: var(--muted); font-size: 12px; margin-top: 5px; }
     .nav-label {
-      color: #9aa8b7;
+      color: var(--muted);
       font-size: 12px;
       padding: 10px 8px 8px;
     }
@@ -410,7 +436,7 @@ HTML = r"""<!doctype html>
       width: 100%;
       border: 1px solid transparent;
       background: transparent;
-      color: #c9d4df;
+      color: #4e5d5b;
       text-align: left;
       padding: 12px 12px;
       border-radius: 8px;
@@ -419,12 +445,12 @@ HTML = r"""<!doctype html>
       margin-bottom: 6px;
     }
     .tab.active {
-      background: #223346;
-      border-color: #344a61;
-      color: #fff;
+      background: var(--primary-soft);
+      border-color: #b8d8d3;
+      color: var(--primary-strong);
       font-weight: 650;
     }
-    .tab:hover { background: #1a2633; color: #fff; }
+    .tab:hover { background: #f0f5f4; color: var(--primary-strong); }
     .main-pane { min-width: 0; }
     main {
       padding: 18px 22px 28px;
@@ -528,6 +554,26 @@ HTML = r"""<!doctype html>
     #infer .panel::before { content: "预测参数"; }
     #export .panel::before { content: "生成参数"; }
     #compare .panel::before { content: "对比参数"; }
+    .advanced {
+      grid-column: 1 / -1;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      padding: 10px 12px 12px;
+    }
+    .advanced summary {
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--primary-strong);
+      list-style-position: inside;
+    }
+    .advanced-grid {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 12px 14px;
+      margin-top: 12px;
+    }
     .card-title {
       display: flex;
       align-items: center;
@@ -620,9 +666,18 @@ HTML = r"""<!doctype html>
       line-height: 1.45;
       margin: 12px 0 0;
     }
-    .cards {
+    pre.preview {
       grid-column: 2;
       grid-row: 3;
+      background: #f8fbfa;
+      color: var(--text);
+      border: 1px solid var(--line);
+      max-height: 260px;
+      margin: 0;
+    }
+    .cards {
+      grid-column: 2;
+      grid-row: 4;
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 10px;
@@ -662,8 +717,9 @@ HTML = r"""<!doctype html>
     .hint { display: none; }
     .section > pre {
       grid-column: 2;
-      grid-row: 4;
+      grid-row: 5;
     }
+    .section > pre.preview { grid-row: 3; }
     #scan.active {
       grid-template-columns: 1fr;
     }
@@ -744,20 +800,26 @@ HTML = r"""<!doctype html>
         <h2>PTH 预测</h2>
         <div class="hint">选择现有推理配置作为结构模板，再覆盖模型、标尺、数据和窗口参数。本页只生成本次运行记录，不写回正式配置。</div>
         <div class="panel grid">
-          <div class="field wide"><label>推理配置模板</label><select id="infer_config"></select></div>
+          <div class="field wide"><label>配置模板（只提供默认值）</label><select id="infer_config"></select></div>
           <div class="field"><label>模型类型</label><select id="infer_model_type"></select></div>
           <div class="field wide"><label>PTH 模型</label><select id="infer_model"></select></div>
           <div class="field wide"><label>scaler.pkl</label><select id="infer_scaler"></select></div>
           <div class="field wide"><label>数据目录</label><select id="infer_data"></select></div>
-          <div class="field"><label>base_window_size</label><input id="infer_base_window_size" type="number" value="500"></div>
-          <div class="field"><label>base_step</label><input id="infer_base_step" type="number" value="200"></div>
-          <div class="field"><label>sequence_length</label><input id="infer_sequence_length" type="number" value="5"></div>
-          <div class="field"><label>sequence_step</label><input id="infer_sequence_step" type="number" value="1"></div>
-          <div class="field"><label>feature_mode</label><select id="infer_feature_mode"></select></div>
-          <div class="field"><label>filter_type</label><input id="infer_filter_type" value="none"></div>
-          <div class="field"><label>max_samples</label><input id="infer_max_samples" type="number" placeholder="空=全量"></div>
+          <details class="advanced">
+            <summary>高级参数（本次运行覆盖模板）</summary>
+            <div class="advanced-grid">
+              <div class="field"><label>base_window_size</label><input id="infer_base_window_size" type="number" value="500"></div>
+              <div class="field"><label>base_step</label><input id="infer_base_step" type="number" value="200"></div>
+              <div class="field"><label>sequence_length</label><input id="infer_sequence_length" type="number" value="5"></div>
+              <div class="field"><label>sequence_step</label><input id="infer_sequence_step" type="number" value="1"></div>
+              <div class="field"><label>feature_mode</label><select id="infer_feature_mode"></select></div>
+              <div class="field"><label>filter_type</label><input id="infer_filter_type" value="none"></div>
+              <div class="field"><label>max_samples</label><input id="infer_max_samples" type="number" placeholder="空=全量"></div>
+            </div>
+          </details>
         </div>
         <div class="actions"><button class="primary" onclick="runInfer()">运行 PTH 预测</button></div>
+        <pre id="infer_preview" class="preview"></pre>
         <div id="infer_metrics" class="cards"></div>
         <pre id="infer_log"></pre>
       </div>
@@ -766,28 +828,34 @@ HTML = r"""<!doctype html>
         <h2>KModel 生成</h2>
         <div class="hint">选择导出模板和量化参数，产物输出到 <code>raw_cnn_pc/artifacts/ui_exports</code>。不写入 <code>raw_cnn_k230</code>。</div>
         <div class="panel grid">
-          <div class="field wide"><label>导出配置模板</label><select id="export_config"></select></div>
+          <div class="field wide"><label>配置模板（只提供默认值）</label><select id="export_config"></select></div>
           <div class="field"><label>模型类型</label><select id="export_model_type"></select></div>
           <div class="field wide"><label>PTH 模型</label><select id="export_model"></select></div>
           <div class="field wide"><label>scaler.pkl</label><select id="export_scaler"></select></div>
           <div class="field wide"><label>校准数据目录</label><select id="export_data"></select></div>
           <div class="field"><label>版本名</label><input id="export_version" placeholder="默认使用 pth 文件名"></div>
-          <div class="field"><label>base_window_size</label><input id="export_base_window_size" type="number" value="500"></div>
-          <div class="field"><label>base_step</label><input id="export_base_step" type="number" value="200"></div>
-          <div class="field"><label>sequence_length</label><input id="export_sequence_length" type="number" value="5"></div>
-          <div class="field"><label>sequence_step</label><input id="export_sequence_step" type="number" value="1"></div>
-          <div class="field"><label>feature_mode</label><select id="export_feature_mode"></select></div>
-          <div class="field"><label>filter_type</label><input id="export_filter_type" value="none"></div>
-          <div class="field"><label>samples_count</label><input id="export_samples_count" type="number" value="512"></div>
-          <div class="field"><label>sampling_strategy</label><select id="export_sampling_strategy"></select></div>
-          <div class="field"><label>quant_type</label><select id="export_quant_type"></select></div>
-          <div class="field"><label>weight_quant_type</label><select id="export_weight_quant_type"></select></div>
-          <div class="field"><label>calibrate_method</label><select id="export_calibrate_method"></select></div>
-          <div class="field"><label>random_seed</label><input id="export_random_seed" type="number" value="20260414"></div>
-          <div class="field"><label>max_calib_samples</label><input id="export_max_calib_samples" type="number" placeholder="空=按配置"></div>
-          <div class="field"><label>跳过 nncase 编译</label><select id="export_skip_compile"><option value="">否，生成 KModel</option><option value="1">是，只导出 ONNX/scaler</option></select></div>
+          <details class="advanced">
+            <summary>高级参数（窗口、预处理、量化策略）</summary>
+            <div class="advanced-grid">
+              <div class="field"><label>base_window_size</label><input id="export_base_window_size" type="number" value="500"></div>
+              <div class="field"><label>base_step</label><input id="export_base_step" type="number" value="200"></div>
+              <div class="field"><label>sequence_length</label><input id="export_sequence_length" type="number" value="5"></div>
+              <div class="field"><label>sequence_step</label><input id="export_sequence_step" type="number" value="1"></div>
+              <div class="field"><label>feature_mode</label><select id="export_feature_mode"></select></div>
+              <div class="field"><label>filter_type</label><input id="export_filter_type" value="none"></div>
+              <div class="field"><label>samples_count</label><input id="export_samples_count" type="number" value="512"></div>
+              <div class="field"><label>sampling_strategy</label><select id="export_sampling_strategy"></select></div>
+              <div class="field"><label>quant_type</label><select id="export_quant_type"></select></div>
+              <div class="field"><label>weight_quant_type</label><select id="export_weight_quant_type"></select></div>
+              <div class="field"><label>calibrate_method</label><select id="export_calibrate_method"></select></div>
+              <div class="field"><label>random_seed</label><input id="export_random_seed" type="number" value="20260414"></div>
+              <div class="field"><label>max_calib_samples</label><input id="export_max_calib_samples" type="number" placeholder="空=按配置"></div>
+              <div class="field"><label>跳过 nncase 编译</label><select id="export_skip_compile"><option value="">否，生成 KModel</option><option value="1">是，只导出 ONNX/scaler</option></select></div>
+            </div>
+          </details>
         </div>
         <div class="actions"><button class="primary" onclick="runExport()">生成 KModel</button></div>
+        <pre id="export_preview" class="preview"></pre>
         <div id="export_metrics" class="cards"></div>
         <pre id="export_log"></pre>
       </div>
@@ -796,26 +864,32 @@ HTML = r"""<!doctype html>
         <h2>PTH vs KModel 对比</h2>
         <div class="hint">可以选择历史 KModel，也可以先生成 KModel 后点击重新扫描再选择。对比结果输出到 <code>raw_cnn_pc/artifacts/ui_compares</code>。</div>
         <div class="panel grid">
-          <div class="field wide"><label>推理配置模板</label><select id="compare_infer_config"></select></div>
-          <div class="field wide"><label>导出配置模板</label><select id="compare_export_config"></select></div>
+          <div class="field wide"><label>推理配置模板（默认值）</label><select id="compare_infer_config"></select></div>
+          <div class="field wide"><label>导出配置模板（可空）</label><select id="compare_export_config"></select></div>
           <div class="field"><label>模型类型</label><select id="compare_model_type"></select></div>
           <div class="field wide"><label>PTH 模型</label><select id="compare_model"></select></div>
           <div class="field wide"><label>scaler.pkl</label><select id="compare_scaler"></select></div>
           <div class="field wide"><label>KModel</label><select id="compare_kmodel"></select></div>
           <div class="field wide"><label>数据目录</label><select id="compare_data"></select></div>
-          <div class="field"><label>base_window_size</label><input id="compare_base_window_size" type="number" value="500"></div>
-          <div class="field"><label>base_step</label><input id="compare_base_step" type="number" value="200"></div>
-          <div class="field"><label>sequence_length</label><input id="compare_sequence_length" type="number" value="5"></div>
-          <div class="field"><label>sequence_step</label><input id="compare_sequence_step" type="number" value="1"></div>
-          <div class="field"><label>feature_mode</label><select id="compare_feature_mode"></select></div>
-          <div class="field"><label>filter_type</label><input id="compare_filter_type" value="none"></div>
-          <div class="field"><label>max_samples</label><input id="compare_max_samples" type="number" placeholder="空=全量"></div>
-          <div class="field"><label>max_per_dryness</label><input id="compare_max_per_dryness" type="number" placeholder="空=不限制"></div>
-          <div class="field"><label>start_index</label><input id="compare_start_index" type="number" value="0"></div>
-          <div class="field"><label>end_index</label><input id="compare_end_index" type="number" placeholder="空=末尾"></div>
-          <div class="field"><label>log_every</label><input id="compare_log_every" type="number" value="500"></div>
+          <details class="advanced">
+            <summary>高级参数（窗口、采样范围、日志频率）</summary>
+            <div class="advanced-grid">
+              <div class="field"><label>base_window_size</label><input id="compare_base_window_size" type="number" value="500"></div>
+              <div class="field"><label>base_step</label><input id="compare_base_step" type="number" value="200"></div>
+              <div class="field"><label>sequence_length</label><input id="compare_sequence_length" type="number" value="5"></div>
+              <div class="field"><label>sequence_step</label><input id="compare_sequence_step" type="number" value="1"></div>
+              <div class="field"><label>feature_mode</label><select id="compare_feature_mode"></select></div>
+              <div class="field"><label>filter_type</label><input id="compare_filter_type" value="none"></div>
+              <div class="field"><label>max_samples</label><input id="compare_max_samples" type="number" placeholder="空=全量"></div>
+              <div class="field"><label>max_per_dryness</label><input id="compare_max_per_dryness" type="number" placeholder="空=不限制"></div>
+              <div class="field"><label>start_index</label><input id="compare_start_index" type="number" value="0"></div>
+              <div class="field"><label>end_index</label><input id="compare_end_index" type="number" placeholder="空=末尾"></div>
+              <div class="field"><label>log_every</label><input id="compare_log_every" type="number" value="500"></div>
+            </div>
+          </details>
         </div>
         <div class="actions"><button class="primary" onclick="runCompare()">运行对比</button></div>
+        <pre id="compare_preview" class="preview"></pre>
         <div id="compare_metrics" class="cards"></div>
         <pre id="compare_log"></pre>
       </div>
@@ -880,6 +954,72 @@ HTML = r"""<!doctype html>
       fillOptions("export_calibrate_method", calibrateMethods);
     }
 
+    function normalizePath(value) {
+      return String(value || "").replaceAll("\\", "/").toLowerCase();
+    }
+
+    function setInputValue(id, value) {
+      const el = document.getElementById(id);
+      if (!el || value === undefined || value === null || value === "") return;
+      el.value = value;
+    }
+
+    function setSelectValue(id, value) {
+      const el = document.getElementById(id);
+      if (!el || value === undefined || value === null || value === "") return;
+      const target = normalizePath(value);
+      const match = [...el.options].find(opt => normalizePath(opt.value) === target);
+      if (match) el.value = match.value;
+    }
+
+    function applyCommonTemplate(prefix, data) {
+      const cfg = data.config || {};
+      const resolved = data.resolved || {};
+      setInputValue(`${prefix}_model_type`, cfg.model?.type);
+      setInputValue(`${prefix}_base_window_size`, cfg.data?.base_window_size);
+      setInputValue(`${prefix}_base_step`, cfg.data?.base_step);
+      setInputValue(`${prefix}_sequence_length`, cfg.data?.sequence_length);
+      setInputValue(`${prefix}_sequence_step`, cfg.data?.sequence_step);
+      setInputValue(`${prefix}_feature_mode`, cfg.preprocessing?.feature_mode);
+      setInputValue(`${prefix}_filter_type`, cfg.preprocessing?.filter_type);
+      setInputValue(`${prefix}_max_samples`, cfg.runtime?.max_samples);
+      setSelectValue(`${prefix}_model`, resolved.weights_path);
+      setSelectValue(`${prefix}_scaler`, resolved.scaler_path);
+      setSelectValue(`${prefix}_data`, resolved.test_data_dir || resolved.export_test_data_dir);
+    }
+
+    function applyExportTemplate(prefix, data) {
+      const cfg = data.config || {};
+      const resolved = data.resolved || {};
+      applyCommonTemplate(prefix, data);
+      setInputValue(`${prefix}_samples_count`, cfg.quantization?.samples_count);
+      setInputValue(`${prefix}_sampling_strategy`, cfg.quantization?.sampling_strategy);
+      setInputValue(`${prefix}_random_seed`, cfg.quantization?.random_seed);
+      setInputValue(`${prefix}_quant_type`, cfg.quantization?.quant_type);
+      setInputValue(`${prefix}_weight_quant_type`, cfg.quantization?.weight_quant_type);
+      setInputValue(`${prefix}_calibrate_method`, cfg.quantization?.calibrate_method);
+      setSelectValue(`${prefix}_data`, resolved.calibration_data_dir || resolved.export_test_data_dir);
+    }
+
+    async function loadTemplate(selectId, kind, prefix) {
+      const path = document.getElementById(selectId)?.value;
+      if (!path) {
+        renderPreview(prefix);
+        return;
+      }
+      const res = await fetch(`/api/config?path=${encodeURIComponent(path)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "配置模板读取失败");
+      if (kind === "export") {
+        applyExportTemplate(prefix, data);
+      } else if (kind === "compare_export") {
+        setSelectValue("compare_kmodel", data.resolved?.kmodel);
+      } else {
+        applyCommonTemplate(prefix, data);
+      }
+      renderPreview(prefix);
+    }
+
     function setText(id, value) {
       const el = document.getElementById(id);
       if (el) el.textContent = value;
@@ -908,6 +1048,13 @@ HTML = r"""<!doctype html>
       fillOptions("compare_kmodel", scanData.kmodel_files);
       updateStats();
       renderScan();
+      await Promise.all([
+        loadTemplate("infer_config", "infer", "infer"),
+        loadTemplate("export_config", "export", "export"),
+        loadTemplate("compare_infer_config", "infer", "compare"),
+        loadTemplate("compare_export_config", "compare_export", "compare"),
+      ]);
+      renderAllPreviews();
       status(`扫描完成：${scanData.pth_files.length} 个 PTH，${scanData.scaler_files.length} 个 scaler，${scanData.kmodel_files.length} 个 KModel。`, "ok");
     }
 
@@ -946,6 +1093,47 @@ HTML = r"""<!doctype html>
       };
     }
 
+    function requestPayload(prefix) {
+      const body = payload(prefix);
+      if (prefix === "export") {
+        body.export_config = document.getElementById("export_config").value;
+        body.version = document.getElementById("export_version").value;
+        body.samples_count = document.getElementById("export_samples_count").value;
+        body.sampling_strategy = document.getElementById("export_sampling_strategy").value;
+        body.quant_type = document.getElementById("export_quant_type").value;
+        body.weight_quant_type = document.getElementById("export_weight_quant_type").value;
+        body.calibrate_method = document.getElementById("export_calibrate_method").value;
+        body.random_seed = document.getElementById("export_random_seed").value;
+        body.max_calib_samples = document.getElementById("export_max_calib_samples").value;
+        body.skip_compile = Boolean(document.getElementById("export_skip_compile").value);
+      }
+      if (prefix === "compare") {
+        body.infer_config = document.getElementById("compare_infer_config").value;
+        body.export_config = document.getElementById("compare_export_config").value;
+        body.kmodel_path = document.getElementById("compare_kmodel").value;
+        body.max_per_dryness = document.getElementById("compare_max_per_dryness").value;
+        body.start_index = document.getElementById("compare_start_index").value;
+        body.end_index = document.getElementById("compare_end_index").value;
+        body.log_every = document.getElementById("compare_log_every").value;
+      }
+      return body;
+    }
+
+    function cleanPayload(body) {
+      return Object.fromEntries(Object.entries(body).filter(([, value]) => value !== "" && value !== null && value !== undefined));
+    }
+
+    function renderPreview(prefix) {
+      const el = document.getElementById(`${prefix}_preview`);
+      if (!el) return;
+      const title = "本次最终参数（页面值覆盖模板，不写回模板）";
+      el.textContent = `${title}\n${JSON.stringify(cleanPayload(requestPayload(prefix)), null, 2)}`;
+    }
+
+    function renderAllPreviews() {
+      ["infer", "export", "compare"].forEach(renderPreview);
+    }
+
     function renderMetrics(id, metrics) {
       const el = document.getElementById(id);
       if (!metrics) { el.innerHTML = ""; return; }
@@ -964,7 +1152,7 @@ HTML = r"""<!doctype html>
       status("正在运行 PTH 预测...");
       document.getElementById("infer_log").textContent = "";
       try {
-        const body = payload("infer");
+        const body = requestPayload("infer");
         const data = await postJson("/api/infer", body);
         document.getElementById("infer_log").textContent = data.output;
         renderMetrics("infer_metrics", {...data.metrics, run_dir: data.run_dir, output_csv: data.output_csv});
@@ -978,17 +1166,7 @@ HTML = r"""<!doctype html>
       status("正在生成 KModel...");
       document.getElementById("export_log").textContent = "";
       try {
-        const body = payload("export");
-        body.export_config = document.getElementById("export_config").value;
-        body.version = document.getElementById("export_version").value;
-        body.samples_count = document.getElementById("export_samples_count").value;
-        body.sampling_strategy = document.getElementById("export_sampling_strategy").value;
-        body.quant_type = document.getElementById("export_quant_type").value;
-        body.weight_quant_type = document.getElementById("export_weight_quant_type").value;
-        body.calibrate_method = document.getElementById("export_calibrate_method").value;
-        body.random_seed = document.getElementById("export_random_seed").value;
-        body.max_calib_samples = document.getElementById("export_max_calib_samples").value;
-        body.skip_compile = Boolean(document.getElementById("export_skip_compile").value);
+        const body = requestPayload("export");
         const data = await postJson("/api/export", body);
         document.getElementById("export_log").textContent = data.output;
         renderMetrics("export_metrics", {export_dir: data.export_dir, kmodel: data.kmodel, onnx: data.onnx, scaler_json: data.scaler_json});
@@ -1003,14 +1181,7 @@ HTML = r"""<!doctype html>
       status("正在运行 PTH vs KModel 对比...");
       document.getElementById("compare_log").textContent = "";
       try {
-        const body = payload("compare");
-        body.infer_config = document.getElementById("compare_infer_config").value;
-        body.export_config = document.getElementById("compare_export_config").value;
-        body.kmodel_path = document.getElementById("compare_kmodel").value;
-        body.max_per_dryness = document.getElementById("compare_max_per_dryness").value;
-        body.start_index = document.getElementById("compare_start_index").value;
-        body.end_index = document.getElementById("compare_end_index").value;
-        body.log_every = document.getElementById("compare_log_every").value;
+        const body = requestPayload("compare");
         const data = await postJson("/api/compare", body);
         document.getElementById("compare_log").textContent = data.output;
         renderMetrics("compare_metrics", {...data.metrics, compare_dir: data.compare_dir});
@@ -1019,6 +1190,19 @@ HTML = r"""<!doctype html>
         status(err.message, "bad");
       }
     }
+
+    document.getElementById("infer_config").addEventListener("change", () => loadTemplate("infer_config", "infer", "infer").catch(err => status(err.message, "bad")));
+    document.getElementById("export_config").addEventListener("change", () => loadTemplate("export_config", "export", "export").catch(err => status(err.message, "bad")));
+    document.getElementById("compare_infer_config").addEventListener("change", () => loadTemplate("compare_infer_config", "infer", "compare").catch(err => status(err.message, "bad")));
+    document.getElementById("compare_export_config").addEventListener("change", () => loadTemplate("compare_export_config", "compare_export", "compare").catch(err => status(err.message, "bad")));
+    document.addEventListener("input", event => {
+      const section = event.target.closest?.(".section");
+      if (section?.id) renderPreview(section.id);
+    });
+    document.addEventListener("change", event => {
+      const section = event.target.closest?.(".section");
+      if (section?.id) renderPreview(section.id);
+    });
 
     fillStatic();
     scan();
@@ -1055,7 +1239,7 @@ class GuiHandler(BaseHTTPRequestHandler):
                     self._send(400, {"error": "missing path"})
                     return
                 path = Path(path_value)
-                self._send(200, load_json_file(path))
+                self._send(200, load_config_for_ui(path))
             else:
                 self._send(404, {"error": "not found"})
         except Exception as exc:
