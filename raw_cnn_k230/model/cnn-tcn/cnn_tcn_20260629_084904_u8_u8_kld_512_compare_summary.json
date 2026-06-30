@@ -1,0 +1,18 @@
+{
+  "total_samples": 256,
+  "nan_count": 0,
+  "pth_mae_vs_true": 0.0153266666457057,
+  "pth_rmse_vs_true": 0.02563847415149212,
+  "kmodel_mae_vs_true": 0.02798665314912796,
+  "kmodel_rmse_vs_true": 0.05511262267827988,
+  "pth_vs_kmodel_mae": 0.02208476886153221,
+  "pth_vs_kmodel_rmse": 0.04975030943751335,
+  "pth_vs_kmodel_max_abs": 0.16306942701339722,
+  "pth_vs_kmodel_p95_abs": 0.143056258559227,
+  "pth_vs_kmodel_p99_abs": 0.15505270957946773,
+  "data_dir": "/opt/vq/VQ_Estimator-gradio-cleanup/data/A9-20260623_无0",
+  "pth_infer_time_sec": 0.1017024191096425,
+  "kmodel_infer_time_sec": 218.62205274100415,
+  "pipeline_total_time_sec": 266.1349912120495,
+  "compare_sampling_strategy": "per_dryness_uniform"
+}

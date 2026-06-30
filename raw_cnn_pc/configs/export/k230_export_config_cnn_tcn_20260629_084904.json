@@ -1,0 +1,58 @@
+{
+  "name": "raw_cnn_k230_export_cnn_tcn_20260629_084904_u8_u8_kld_512",
+  "paths": {
+    "weights_pth": "model/cnn-tcn/cnn_tcn_20260629_084904.pth",
+    "onnx": "../raw_cnn_k230/model/cnn-tcn/cnn_tcn_20260629_084904_u8_u8_kld_512.onnx",
+    "kmodel": "../raw_cnn_k230/model/cnn-tcn/cnn_tcn_20260629_084904_u8_u8_kld_512.kmodel",
+    "scaler_pkl": "model/cnn-tcn/scaler_20260629_084904.pkl",
+    "scaler_json": "../raw_cnn_k230/model/cnn-tcn/cnn_tcn_20260629_084904_u8_u8_kld_512_scaler.json",
+    "calibration_npy": "../raw_cnn_k230/model/cnn-tcn/cnn_tcn_20260629_084904_u8_u8_kld_512_calibration_input.npy",
+    "calibration_data_dir": "D:/code/network/VQ_Estimator/data/A9-20260623_\u65e00",
+    "test_data_dir": "D:/code/network/VQ_Estimator/data/A9-20260623_\u65e00",
+    "predictions_csv": "../raw_cnn_k230/predictions_cnn_tcn_k230_20260629_084904_u8_u8_kld_512.csv",
+    "nncase_dump_dir": "../raw_cnn_k230/model/cnn-tcn/nncase_dump_cnn_tcn_20260629_084904_u8_u8_kld_512"
+  },
+  "data": {
+    "base_window_size": 500,
+    "base_step": 200,
+    "sequence_length": 5,
+    "sequence_step": 1
+  },
+  "preprocessing": {
+    "feature_mode": "window_demean",
+    "filter_type": "Causal Extreme Spike Filter"
+  },
+  "model": {
+    "type": "CNN-TCN",
+    "cnn_tcn_conv_filters": [
+      16,
+      32
+    ],
+    "cnn_tcn_kernel_size": [
+      5,
+      3
+    ],
+    "cnn_tcn_pool_size": [
+      2,
+      2
+    ],
+    "cnn_tcn_num_channels": [
+      16,
+      32
+    ],
+    "cnn_tcn_tcn_kernel_size": 3,
+    "cnn_tcn_dilations": [
+      1,
+      2
+    ],
+    "cnn_tcn_dropout": 0.0
+  },
+  "quantization": {
+    "samples_count": 512,
+    "sampling_strategy": "per_dryness_uniform",
+    "random_seed": 20260414,
+    "quant_type": "uint8",
+    "weight_quant_type": "uint8",
+    "calibrate_method": "Kld"
+  }
+}

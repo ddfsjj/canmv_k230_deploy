@@ -1,0 +1,29 @@
+{
+  "model_path": "/opt/vq/VQ_Estimator-gradio-cleanup/outputs/models/cnn_tcn_20260629_084904.pth",
+  "metadata_path": "/opt/vq/VQ_Estimator-gradio-cleanup/outputs/models/cnn_tcn_20260629_084904.meta.json",
+  "scaler_path": "/opt/vq/VQ_Estimator-gradio-cleanup/outputs/models/scaler_20260629_084904.pkl",
+  "model_type": "CNN-TCN",
+  "scheme_id": "u8_u8_kld_512",
+  "scheme": {
+    "title": "uint8 激活 + uint8 权重 + Kld + 512",
+    "samples_count": 512,
+    "sampling_strategy": "per_dryness_uniform",
+    "quant_type": "uint8",
+    "weight_quant_type": "uint8",
+    "calibrate_method": "Kld",
+    "random_seed": 20260414
+  },
+  "quant_slug": "u8_u8_kld_512",
+  "compare_sampling_strategy": "per_dryness_uniform",
+  "output_dir": "/opt/vq/VQ_Estimator-gradio-cleanup/outputs/k230_quant/cnn_tcn_20260629_084904_u8_u8_kld_512_20260629_085946",
+  "infer_config": "/opt/vq/VQ_Estimator-gradio-cleanup/outputs/k230_quant/cnn_tcn_20260629_084904_u8_u8_kld_512_20260629_085946/infer_config.json",
+  "export_config": "/opt/vq/VQ_Estimator-gradio-cleanup/outputs/k230_quant/cnn_tcn_20260629_084904_u8_u8_kld_512_20260629_085946/k230_export_config.json",
+  "onnx": "/opt/vq/VQ_Estimator-gradio-cleanup/outputs/k230_quant/cnn_tcn_20260629_084904_u8_u8_kld_512_20260629_085946/cnn_tcn_20260629_084904_u8_u8_kld_512.onnx",
+  "kmodel": "/opt/vq/VQ_Estimator-gradio-cleanup/outputs/k230_quant/cnn_tcn_20260629_084904_u8_u8_kld_512_20260629_085946/cnn_tcn_20260629_084904_u8_u8_kld_512.kmodel",
+  "scaler_json": "/opt/vq/VQ_Estimator-gradio-cleanup/outputs/k230_quant/cnn_tcn_20260629_084904_u8_u8_kld_512_20260629_085946/cnn_tcn_20260629_084904_u8_u8_kld_512_scaler.json",
+  "calibration_npy": "/opt/vq/VQ_Estimator-gradio-cleanup/outputs/k230_quant/cnn_tcn_20260629_084904_u8_u8_kld_512_20260629_085946/cnn_tcn_20260629_084904_u8_u8_kld_512_calibration.npy",
+  "compare_summary": "/opt/vq/VQ_Estimator-gradio-cleanup/outputs/k230_quant/cnn_tcn_20260629_084904_u8_u8_kld_512_20260629_085946/compare_summary.json",
+  "compare_details": "/opt/vq/VQ_Estimator-gradio-cleanup/outputs/k230_quant/cnn_tcn_20260629_084904_u8_u8_kld_512_20260629_085946/compare_details.csv",
+  "compare_per_csv": "/opt/vq/VQ_Estimator-gradio-cleanup/outputs/k230_quant/cnn_tcn_20260629_084904_u8_u8_kld_512_20260629_085946/compare_per_csv.csv",
+  "compare_per_dryness": "/opt/vq/VQ_Estimator-gradio-cleanup/outputs/k230_quant/cnn_tcn_20260629_084904_u8_u8_kld_512_20260629_085946/compare_per_dryness.csv"
+}

@@ -1,0 +1,52 @@
+{
+  "generated_at_utc": "2026-06-25T12:26:39.917289+00:00",
+  "profile_name": "cnn_tcn_uart_two_inputs",
+  "source_config": "raw_cnn_k230/configs/runtime.json",
+  "sdcard_root": "deploy_pkg",
+  "app_dir": "deploy_pkg/raw_cnn_k230",
+  "root_files": [
+    "boot.py",
+    "main.py"
+  ],
+  "root_file_records": [
+    {
+      "path": "boot.py",
+      "bytes": 298,
+      "sha256": "d470725c31b69de6149efd6cea3f3e8ab229f8b0672f96d13cf91fde360490ec"
+    },
+    {
+      "path": "main.py",
+      "bytes": 1323,
+      "sha256": "dd73ebe5dc896ed1aea67f4eb8fec6b4703afaab520ad292134d9ea07bae30ec"
+    }
+  ],
+  "config": {
+    "path": "raw_cnn_k230/configs/runtime.json",
+    "bytes": 4013,
+    "sha256": "f699558e98c2de57aefecd55680a3a46a8045555aceec8668dd7d7fdaa28193b"
+  },
+  "files": [
+    "boot.py",
+    "main.py",
+    "run_k230_infer.py",
+    "run_k230_multi_infer.py",
+    "runtime/",
+    "configs/runtime.json",
+    "model/cnn-tcn/cnn_tcn_20260625_103918_u8_u8_kld_512.kmodel",
+    "model/cnn-tcn/cnn_tcn_20260625_103918_u8_u8_kld_512_scaler.json"
+  ],
+  "assets": [
+    {
+      "path": "model/cnn-tcn/cnn_tcn_20260625_103918_u8_u8_kld_512.kmodel",
+      "bytes": 30048,
+      "sha256": "17548f43ee73fba372b03aa32024573d510e88ed2fc2e7427d2f62f357b904f5",
+      "kind": "kmodel"
+    },
+    {
+      "path": "model/cnn-tcn/cnn_tcn_20260625_103918_u8_u8_kld_512_scaler.json",
+      "bytes": 23697,
+      "sha256": "07a7a6f99fb34494dbdd11d375168f7b8d1169a7f2a0dad7bd07d2454ea84914",
+      "kind": "scaler_json"
+    }
+  ]
+}

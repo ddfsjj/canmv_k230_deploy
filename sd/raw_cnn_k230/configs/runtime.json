@@ -1,0 +1,160 @@
+{
+  "version": 1,
+  "profile_name": "cnn_tcn_uart_two_inputs",
+  "input": {
+    "type": "uart",
+    "channel_count": 12,
+    "uart": {
+      "enabled": true,
+      "uart_id": 2,
+      "tx_pin": 11,
+      "rx_pin": 12,
+      "baudrate": 921600,
+      "bits": 8,
+      "parity": "none",
+      "stop": 1,
+      "value_type": "int32",
+      "byte_order": "big",
+      "header": [85, 170],
+      "tail": [252, 207],
+      "outer_frame_enabled": true,
+      "outer_frame_count": 20,
+      "outer_header": [247, 127],
+      "outer_tail": [250, 175]
+    }
+  },
+  "runtime": {
+    "mode": "uart_online",
+    "idle_sleep_ms": 1,
+    "send_zeros_before_ready": false,
+    "quiet": false,
+    "debug_predict_trace": true,
+    "debug_uart_read_timing": false,
+    "debug_outer_rx": false,
+    "debug_outer_rx_only_abnormal": false,
+    "debug_outer_rx_interval_warn_ms": 25.0,
+    "debug_tx_timing": false,
+    "debug_tx_only_abnormal": true,
+    "debug_tx_interval_min_warn_ms": 180.0,
+    "debug_tx_interval_max_warn_ms": 240.0,
+    "flush_rx_on_start": true,
+    "startup_flush_empty_rounds": 3,
+    "startup_flush_sleep_ms": 10,
+    "csv_cached": {
+      "max_samples": 12,
+      "infer_batch_size": 12,
+      "write_predictions_csv": true
+    }
+  },
+  "models": [
+    {
+      "name": "model_1_cnn_tcn",
+      "enabled": true,
+      "model_type": "cnn_tcn",
+      "input_channels": [0, 1],
+      "output": {
+        "name": "model_1_cnn_tcn",
+        "slots": {
+          "0": 0,
+          "1": 1
+        },
+        "scale": 100
+      },
+      "assets": {
+        "kmodel": "model/cnn-tcn/cnn_tcn_20260625_103918_u8_u8_kld_512.kmodel",
+        "scaler_json": "model/cnn-tcn/cnn_tcn_20260625_103918_u8_u8_kld_512_scaler.json"
+      },
+      "window": {
+        "base_window_size": 500,
+        "base_step": 200,
+        "sequence_length": 5,
+        "sequence_step": 1,
+        "feature_mode": "window_demean"
+      }
+    },
+    {
+      "name": "model_2_cnn_tcn",
+      "enabled": true,
+      "model_type": "cnn_tcn",
+      "input_channels": [0, 1],
+      "output": {
+        "name": "model_2_cnn_tcn",
+        "slots": {
+          "0": 2,
+          "1": 3
+        },
+        "scale": 100
+      },
+      "assets": {
+        "kmodel": "model/cnn-tcn/cnn_tcn_20260625_103918_u8_u8_kld_512.kmodel",
+        "scaler_json": "model/cnn-tcn/cnn_tcn_20260625_103918_u8_u8_kld_512_scaler.json"
+      },
+      "window": {
+        "base_window_size": 500,
+        "base_step": 200,
+        "sequence_length": 5,
+        "sequence_step": 1,
+        "feature_mode": "window_demean"
+      }
+    }
+  ],
+  "status": {
+    "raw_anomaly": {
+      "enabled": false,
+      "hit_count": 1,
+      "clear_count": 1,
+      "all_zero_enabled": true,
+      "raw_range_enabled": true,
+      "raw_min": 1,
+      "raw_max": 2000000,
+      "stuck_enabled": true,
+      "spike_enabled": true,
+      "spike_max_diff": 200000
+    },
+    "zero_guard": {
+      "enabled": false,
+      "output_value": 0.0,
+      "freq_enter_threshold": 480000.0,
+      "freq_exit_threshold": 500000.0,
+      "enter_consecutive_windows": 3,
+      "exit_consecutive_windows": 3,
+      "confidence_absz_threshold": 3.0
+    },
+    "postprocessing": {
+      "enabled": true,
+      "type": "kalman",
+      "exp_smooth_alpha": 0.3,
+      "kalman_q": 0.001,
+      "kalman_r": 0.1,
+      "apply_to_zero_guard": false,
+      "reset_on_zero_guard": true
+    },
+    "full_gas_alarm": {
+      "enabled": false,
+      "output_name": "full_gas_alarm",
+      "output_slot": 4
+    }
+  },
+  "output": {
+    "slot_count": 12,
+    "default_value": 0.0,
+    "predict_scale": 100,
+    "value_type": "int32",
+    "byte_order": "big",
+    "predictions_csv": "predictions_runtime.csv",
+    "value_guard": {
+      "enabled": true,
+      "min": 0.0,
+      "max": 1.0,
+      "replace_non_finite_with": 0.0
+    },
+    "frame": {
+      "header": [85, 170],
+      "tail": [252, 207],
+      "outer_frame_enabled": true,
+      "outer_frame_count": 20,
+      "outer_header": [247, 127],
+      "outer_tail": [250, 175]
+    }
+  }
+}
