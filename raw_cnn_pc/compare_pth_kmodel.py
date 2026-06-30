@@ -247,11 +247,14 @@ def run_pth_predictions(X_scaled: np.ndarray, infer_cfg: dict, root: Path, X_raw
         if infer.normalize_model_type(model_cfg.get("type", "CNN-All")) == "cnn_tcn_seg3_soft_stats_moe":
             if X_raw_aux is None:
                 raise RuntimeError("seg3 requires raw aux input for PTH prediction.")
-            outputs = model(
-                torch.from_numpy(X_scaled),
-                aux=torch.from_numpy(X_raw_aux.astype(np.float32, copy=False)),
-            )
-            return model.compose_prediction(outputs["prediction"]).cpu().numpy().reshape(-1).astype(np.float32)
+            x_tensor = torch.from_numpy(X_scaled)
+            aux_tensor = torch.from_numpy(X_raw_aux.astype(np.float32, copy=False))
+            if hasattr(model, "forward_debug"):
+                prediction = model.forward_debug(x_tensor, aux=aux_tensor)["prediction"]
+            else:
+                outputs = model(x_tensor, aux=aux_tensor)
+                prediction = outputs["prediction"] if isinstance(outputs, dict) else outputs
+            return model.compose_prediction(prediction).cpu().numpy().reshape(-1).astype(np.float32)
         return model(torch.from_numpy(X_scaled)).cpu().numpy().reshape(-1).astype(np.float32)
 
 
