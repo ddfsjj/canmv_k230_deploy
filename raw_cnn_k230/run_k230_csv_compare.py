@@ -77,9 +77,9 @@ def load_base_module_from_file():
     script_dir = detect_script_dir()
     candidates = []
     if script_dir:
-        candidates.append(str(script_dir).replace("\\", "/") + "/run_k230_infer.py")
-    candidates.append("/sdcard/raw_cnn_k230/run_k230_infer.py")
-    candidates.append("run_k230_infer.py")
+        candidates.append(str(script_dir).replace("\\", "/") + "/legacy/run_k230_infer_legacy.py")
+    candidates.append("/sdcard/raw_cnn_k230/legacy/run_k230_infer_legacy.py")
+    candidates.append("legacy/run_k230_infer_legacy.py")
 
     last_error = None
     for path in candidates:
@@ -87,7 +87,7 @@ def load_base_module_from_file():
             with open(path, "r") as f:
                 source = f.read()
             module_globals = {
-                "__name__": "run_k230_infer",
+                "__name__": "run_k230_infer_legacy",
                 "__file__": path,
             }
             exec(source, module_globals)
@@ -105,11 +105,11 @@ def load_base_module_from_file():
 
     if last_error is not None:
         raise last_error
-    raise ImportError("Cannot load run_k230_infer.py")
+    raise ImportError("Cannot load legacy/run_k230_infer_legacy.py")
 
 
 try:
-    import run_k230_infer as base
+    from legacy import run_k230_infer_legacy as base
 except ImportError:
     base = load_base_module_from_file()
 

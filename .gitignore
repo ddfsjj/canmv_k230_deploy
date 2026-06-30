@@ -12,12 +12,15 @@ I
 
 # 本地评估、对比和调试产物
 artifacts/
+deploy_pkg/
 raw_cnn_pc/artifacts/
 raw_cnn_pc/tmp/
 raw_cnn_pc/scheme_eval/
 raw_cnn_pc/experiments/
 raw_cnn_pc/layerwise_compare/
 raw_cnn_pc/raw_cnn_pc/
+raw_cnn_k230/k230-outputs/
+raw_cnn_k230/docx_render_check/
 
 # 编译转储目录
 gmodel_dump_dir/

@@ -1,0 +1,5 @@
+{
+  "entry": "multi",
+  "single_config": "configs/legacy/k230_config_cnn_tcn.json",
+  "multi_config": "configs/legacy/k230_config_multi.json"
+}

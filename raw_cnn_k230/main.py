@@ -1,91 +1,46 @@
 """
 K230 上电自启入口。
 
-这份入口脚本只负责一件事：根据配置决定本次自启跑单模型还是多模型。
+这份入口脚本只负责一件事：启动统一 runtime。
 
 设计原则：
-1. 默认行为保持兼容，未配置时仍走单模型。
-2. 切换模式尽量只改配置文件，不要求手改 main.py。
+1. 板端默认只读 configs/runtime.json。
+2. 单模型/多模型都由 runtime.json 的 models[] 决定。
 3. 外层保留异常重启循环，避免业务脚本报错后整板停死。
 """
 
-import json
 import sys
 import time
+try:
+    import uos as os  # type: ignore
+except ImportError:
+    import os
 
 APP_DIR = "/sdcard/raw_cnn_k230"
-AUTO_START_CONFIG_PATH = APP_DIR + "/configs/auto_start_config.json"
+RUNTIME_CONFIG_PATH = "/sdcard/raw_cnn_k230/configs/runtime.json"
 
 # 中文注释：保证后续可以直接导入应用目录下的脚本。
 if APP_DIR not in sys.path:
     sys.path.insert(0, APP_DIR)
 
 
-def load_auto_start_config():
-    """
-    中文注释：读取自启配置。
-
-    配置缺失时自动回退到单模型默认值，这样即使用户还没创建配置文件，
-    板子也能沿用原先的单模型方式启动，不会因为少一份 json 直接起不来。
-    """
-    default_cfg = {
-        "entry": "single",
-        "single_config": "configs/k230_config_cnn_tcn.json",
-        "multi_config": "configs/k230_config_multi.json",
-    }
-    try:
-        with open(AUTO_START_CONFIG_PATH, "r") as f:
-            loaded = json.load(f)
-    except Exception:
-        return default_cfg
-
-    if not isinstance(loaded, dict):
-        return default_cfg
-
-    merged = dict(default_cfg)
-    merged.update(loaded)
-    return merged
-
-
-def normalize_entry_mode(raw_value):
-    """
-    中文注释：统一自启模式写法。
-
-    这里兼容几种常见写法，避免配置里写成 `multi-model`、`multi_models`
-    之类的形式时因为名字不完全一致导致走错分支。
-    """
-    text = str(raw_value or "").strip().lower().replace("-", "_").replace(" ", "_")
-    if text in {"multi", "multiple", "multi_model", "multi_models"}:
-        return "multi"
-    return "single"
-
-
 def run_once():
-    """
-    中文注释：执行一次自启。
-
-    选择规则：
-    1. `entry = single` 时调用单模型入口 `run_k230_infer.py`
-    2. `entry = multi`  时调用多模型入口 `run_k230_multi_infer.py`
-    """
-    auto_cfg = load_auto_start_config()
-    entry = normalize_entry_mode(auto_cfg.get("entry", "single"))
-
-    if entry == "multi":
-        config_path = str(auto_cfg.get("multi_config", "configs/k230_config_multi.json"))
-        print("Auto-start mode: multi")
-        print("Auto-start config:", config_path)
-        import run_k230_multi_infer as infer_app
-        infer_app.OVERRIDE_CONFIG_PATH = config_path
-        infer_app.main()
-        return
-
-    config_path = str(auto_cfg.get("single_config", "configs/k230_config_cnn_tcn.json"))
-    print("Auto-start mode: single")
-    print("Auto-start config:", config_path)
+    """中文注释：执行一次统一 runtime 自启。"""
+    print("Auto-start mode: unified")
+    print("Auto-start config:", RUNTIME_CONFIG_PATH)
     import run_k230_infer as infer_app
-    infer_app.OVERRIDE_CONFIG_PATH = config_path
+    infer_app.OVERRIDE_CONFIG_PATH = RUNTIME_CONFIG_PATH
     infer_app.main()
+
+
+def print_startup_error(exc):
+    print("UART auto-start error:", exc)
+    print("APP_DIR:", APP_DIR)
+    print("RUNTIME_CONFIG_PATH:", RUNTIME_CONFIG_PATH)
+    try:
+        print("cwd:", os.getcwd())
+    except Exception as cwd_exc:
+        print("cwd unavailable:", cwd_exc)
 
 
 while True:
@@ -94,7 +49,7 @@ while True:
     except Exception as exc:
         # 中文注释：启动类程序不能因为一次异常就直接退出，
         # 否则板子上电后会停在错误状态，只能人工重启。
-        print("UART auto-start error:", exc)
+        print_startup_error(exc)
         if hasattr(time, "sleep_ms"):
             time.sleep_ms(1000)
         else:

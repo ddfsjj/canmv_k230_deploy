@@ -7,8 +7,13 @@ import numpy as np
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "raw_cnn_k230"))
+
+from runtime import guards  # noqa: E402
+
+
 SCALER_PATH = ROOT / "raw_cnn_k230/model/cnn-tcn/scaler_cnn_tcn_20260505_103801_u8u8_kld512.json"
-CONFIG_PATH = ROOT / "raw_cnn_k230/configs/k230_config_multi.json"
+CONFIG_PATH = ROOT / "raw_cnn_k230/configs/runtime.json"
 
 
 def read_scaler():
@@ -21,8 +26,9 @@ def read_scaler():
 
 def read_guard_config():
     cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    guard = cfg["zero_guard"]
-    return guard["thresholds"], int(guard.get("min_votes", 3))
+    if "status" in cfg:
+        return cfg.get("status", {}).get("zero_guard", {})
+    return cfg["zero_guard"]
 
 
 def extract_last_20_numbers(path):
@@ -56,6 +62,7 @@ def compute_features(raw_seq, mean, scale):
         "diff_p95_abs": float(np.percentile(diffs, 95)),
         "win_range_mean": float((raw_seq.max(axis=1) - raw_seq.min(axis=1)).mean()),
         "win_std_mean": float(raw_seq.std(axis=1).mean()),
+        "freq_mean": float(raw_seq.reshape(-1).mean()),
         "absz_mean": float(np.abs(scaled).mean()),
     }
 
@@ -65,21 +72,26 @@ def main():
         raise SystemExit("usage: python tools/check_zero_guard_txt.py <txt/log path>")
     path = Path(sys.argv[1])
     mean, scale = read_scaler()
-    thresholds, min_votes = read_guard_config()
+    guard = read_guard_config()
     values, bad_lines, first_rows = extract_last_20_numbers(path)
 
     windows = [values[start : start + 500] for start in range(0, len(values) - 500 + 1, 200)]
     rows = []
+    state = guards.ZeroGuardState(guard)
     for win_idx in range(4, len(windows)):
         raw_seq = np.stack(windows[win_idx - 4 : win_idx + 1])
         features = compute_features(raw_seq, mean, scale)
-        votes = sum(features[key] <= thresholds[key] for key in thresholds)
+        zero_identity = features["freq_mean"] <= float(guard.get("freq_enter_threshold", 480000.0))
+        hit = state.update(features["freq_mean"]) if bool(guard.get("enabled", False)) else False
+        features["zero_identity"] = zero_identity
+        features["zero_guard_state"] = bool(state.active)
+        features["enter_count"] = int(state.enter_count)
+        features["exit_count"] = int(state.exit_count)
         rows.append(
             {
                 "rx": win_idx * 200 + 500,
                 "features": features,
-                "votes": votes,
-                "hit": votes >= min_votes,
+                "hit": bool(hit),
             }
         )
 
@@ -97,8 +109,16 @@ def main():
                 "mean": float(values.mean()),
             },
         )
-    print("thresholds:", thresholds)
-    print("min_votes:", min_votes)
+    print(
+        "zero_guard:",
+        {
+            "enabled": bool(guard.get("enabled", False)),
+            "freq_enter_threshold": float(guard.get("freq_enter_threshold", 480000.0)),
+            "freq_exit_threshold": float(guard.get("freq_exit_threshold", 500000.0)),
+            "enter_consecutive_windows": int(guard.get("enter_consecutive_windows", 3)),
+            "exit_consecutive_windows": int(guard.get("exit_consecutive_windows", 3)),
+        },
+    )
     print("triggers:", len(rows))
     if rows:
         hit_rate = sum(row["hit"] for row in rows) / float(len(rows))
@@ -108,12 +128,11 @@ def main():
             print(
                 {
                     "rx": row["rx"],
-                    "votes": int(row["votes"]),
                     "hit": bool(row["hit"]),
                     "features": {key: round(value, 6) for key, value in row["features"].items()},
                 }
             )
-        for key in thresholds:
+        for key in ("freq_mean", "diff_p95_abs", "win_range_mean", "win_std_mean", "absz_mean"):
             vals = np.array([row["features"][key] for row in rows], dtype=np.float64)
             print(
                 key,

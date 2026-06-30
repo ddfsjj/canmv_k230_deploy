@@ -1,8 +1,8 @@
 {
   "name": "raw_cnn_k230_runtime_cnn_tcn_20260505_103801_u8u8_kld512",
   "paths": {
-    "kmodel": "model/cnn-tcn/cnn_tcn_20260505_103801_u8u8_kld512.kmodel",
-    "scaler_json": "model/cnn-tcn/scaler_cnn_tcn_20260505_103801_u8u8_kld512.json",
+    "kmodel": "model/cnn-tcn/cnn_tcn_20260625_103918_u8_u8_kld_512.kmodel",
+    "scaler_json": "model/cnn-tcn/cnn_tcn_20260625_103918_u8_u8_kld_512_scaler.json",
     "test_data_dir": "../data/new_data",
     "predictions_csv": "predictions_cnn_tcn_k230_20260505_103801_u8u8_kld512.csv"
   },
@@ -19,16 +19,26 @@
     "feature_mode": "window_demean",
     "filter_type": "none"
   },
+  "raw_anomaly_alarm": {
+    "enabled": false,
+    "hit_count": 1,
+    "clear_count": 1,
+    "all_zero_enabled": true,
+    "raw_range_enabled": true,
+    "raw_min": 1,
+    "raw_max": 2000000,
+    "stuck_enabled": true,
+    "spike_enabled": true,
+    "spike_max_diff": 200000
+  },
   "zero_guard": {
-    "enabled": true,
+    "enabled": false,
     "output_value": 0.0,
-    "min_votes": 3,
-    "thresholds": {
-      "diff_p95_abs": 75.0,
-      "win_range_mean": 280.0,
-      "win_std_mean": 40.0,
-      "absz_mean": 0.012
-    }
+    "freq_enter_threshold": 480000.0,
+    "freq_exit_threshold": 500000.0,
+    "enter_consecutive_windows": 3,
+    "exit_consecutive_windows": 3,
+    "confidence_absz_threshold": 3.0
   },
   "postprocessing": {
     "enabled": true,

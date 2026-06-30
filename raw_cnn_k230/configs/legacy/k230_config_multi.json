@@ -17,13 +17,23 @@
   "zero_guard": {
     "enabled": true,
     "output_value": 0.0,
-    "min_votes": 3,
-    "thresholds": {
-      "diff_p95_abs": 90.0,
-      "win_range_mean": 300.0,
-      "win_std_mean": 55.0,
-      "absz_mean": 0.022
-    }
+    "freq_enter_threshold": 480000.0,
+    "freq_exit_threshold": 500000.0,
+    "enter_consecutive_windows": 3,
+    "exit_consecutive_windows": 3,
+    "confidence_absz_threshold": 3.0
+  },
+  "raw_anomaly_alarm": {
+    "enabled": true,
+    "hit_count": 1,
+    "clear_count": 1,
+    "all_zero_enabled": true,
+    "raw_range_enabled": true,
+    "raw_min": 1,
+    "raw_max": 2000000,
+    "stuck_enabled": true,
+    "spike_enabled": true,
+    "spike_max_diff": 200000
   },
   "postprocessing": {
     "enabled": true,
