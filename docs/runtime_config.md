@@ -87,6 +87,21 @@ model_1_cnn_tcn_ch1 -> slot 1
 
 ## 常用命令
 
+从 PC 导出配置预览更新 runtime 模型条目：
+
+```bash
+python scripts/update_runtime_config_from_export.py --export-config raw_cnn_pc/configs/export/k230_export_config_cnn_tcn.json --model-index 0 --dry-run
+```
+
+确认后写回：
+
+```bash
+python scripts/update_runtime_config_from_export.py --export-config raw_cnn_pc/configs/export/k230_export_config_cnn_tcn.json --model-index 0
+```
+
+默认替换 `models[0]`，保留原模型的 `input_channels` 和 `output.slots`。
+新增模型时使用 `--append`，并用 `--input-channels`、`--output-slots` 指定物理通道和返回槽位。
+
 校验当前默认配置：
 
 ```bash

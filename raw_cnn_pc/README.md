@@ -114,6 +114,28 @@ models[].window
 
 不要再改旧的 `k230_config_*.json` 作为正式部署入口。旧配置只作为 legacy reference。
 
+也可以从 PC 导出配置生成/更新 runtime 模型条目。先预览：
+
+```bash
+python scripts/update_runtime_config_from_export.py ^
+  --export-config raw_cnn_pc/configs/export/k230_export_config_cnn_tcn.json ^
+  --model-index 0 ^
+  --dry-run
+```
+
+确认无误后去掉 `--dry-run` 写回 `raw_cnn_k230/configs/runtime.json`。
+默认是替换 `models[0]`，会保留原来的 `input_channels` 和 `output.slots`。
+如果要追加一个新模型，用 `--append`；如果要同时改通道和槽位，用：
+
+```bash
+python scripts/update_runtime_config_from_export.py ^
+  --export-config raw_cnn_pc/configs/export/k230_export_config_cnn_tcn.json ^
+  --append ^
+  --model-name model_3_cnn_tcn ^
+  --input-channels 0,1 ^
+  --output-slots 0:4,1:5
+```
+
 ## 导出后验证
 
 回到仓库根目录运行：

@@ -20,6 +20,16 @@ python scripts/validate_runtime_config.py
 
 ## 生成部署包
 
+如果刚从 PC 侧导出了新的 `.kmodel` 和 scaler `.json`，可以先用导出配置更新
+`runtime.json`：
+
+```bash
+python scripts/update_runtime_config_from_export.py --export-config raw_cnn_pc/configs/export/k230_export_config_cnn_tcn.json --model-index 0 --dry-run
+python scripts/update_runtime_config_from_export.py --export-config raw_cnn_pc/configs/export/k230_export_config_cnn_tcn.json --model-index 0
+```
+
+`--dry-run` 只打印结果，不写文件。确认模型路径、窗口参数、feature mode 和输出槽位正确后再写回。
+
 ```bash
 python scripts/make_deploy_package.py --clean
 ```
