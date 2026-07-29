@@ -96,10 +96,15 @@ def build_slot_error_codes(output_cfg, output_source_by_name, channel_raw_error_
         if (
             code == protocol.RAW_ANOMALY_OK
             and getattr(full_gas_alarm, "enabled", False)
-            and getattr(full_gas_alarm, "alarm_on", False)
             and output_name in output_source_by_name
         ):
-            code = protocol.FULL_GAS_ALARM_CODE
+            slot_alarm = False
+            if hasattr(full_gas_alarm, "is_alarm_output"):
+                slot_alarm = bool(full_gas_alarm.is_alarm_output(output_name))
+            else:
+                slot_alarm = bool(getattr(full_gas_alarm, "alarm_on", False))
+            if slot_alarm:
+                code = int(getattr(full_gas_alarm, "alarm_code", protocol.FULL_GAS_ALARM_CODE)) & 0xFF
         codes.append(code)
     return codes
 

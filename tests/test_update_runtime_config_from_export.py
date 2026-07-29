@@ -91,8 +91,18 @@ class UpdateRuntimeConfigFromExportTest(unittest.TestCase):
 
     def test_script_output_can_be_parsed_as_json(self):
         payload = updater.update_runtime_config(self.make_runtime(), self.make_export(), make_args())
-        text = json.dumps(payload, indent=2, ensure_ascii=False)
+        text = updater.format_runtime_config_json(payload)
         self.assertEqual(json.loads(text)["models"][0]["assets"]["kmodel"], "model/cnn-tcn/new.kmodel")
+
+    def test_runtime_formatter_keeps_channels_compact_and_slots_expanded(self):
+        payload = updater.update_runtime_config(
+            self.make_runtime(),
+            self.make_export(),
+            make_args(input_channels="0,1,2", output_slots="0:0,1:1,2:2"),
+        )
+        text = updater.format_runtime_config_json(payload)
+        self.assertIn('"input_channels": [0, 1, 2]', text)
+        self.assertIn('"slots": {\n          "0": 0,\n          "1": 1,\n          "2": 2\n        }', text)
 
 
 if __name__ == "__main__":

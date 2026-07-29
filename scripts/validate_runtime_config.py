@@ -34,8 +34,18 @@ def resolve_repo_path(raw_path):
     return ROOT / path
 
 
-def require_file(base_dir, rel_path, label, errors):
-    path = base_dir / rel_path
+def resolve_asset_path(base_dir, rel_path, source_path=None):
+    if source_path:
+        source = Path(source_path)
+        if not source.is_absolute():
+            source = ROOT / source
+        if source.exists():
+            return source
+    return base_dir / rel_path
+
+
+def require_file(base_dir, rel_path, label, errors, source_path=None):
+    path = resolve_asset_path(base_dir, rel_path, source_path)
     if not path.exists():
         errors.append(f"{label} missing: {rel_path} -> {path}")
     elif not path.is_file():
@@ -44,6 +54,26 @@ def require_file(base_dir, rel_path, label, errors):
 
 
 def validate_files(cfg, errors):
+    if isinstance(cfg, dict) and isinstance(cfg.get("models"), list):
+        for idx, model in enumerate(cfg.get("models", [])):
+            assets = model.get("assets", {}) if isinstance(model, dict) else {}
+            if assets:
+                require_file(
+                    K230_DIR,
+                    assets.get("kmodel", ""),
+                    f"models[{idx}].kmodel",
+                    errors,
+                    assets.get("kmodel_source"),
+                )
+                require_file(
+                    K230_DIR,
+                    assets.get("scaler_json", ""),
+                    f"models[{idx}].scaler_json",
+                    errors,
+                    assets.get("scaler_json_source"),
+                )
+        return
+
     legacy = to_legacy_multi_config(cfg)
     for idx, model in enumerate(legacy.get("models", [])):
         paths = model.get("paths", {})

@@ -74,3 +74,28 @@ def mean_1d(values):
     for i in range(count):
         total += float(values[i])
     return total / float(count)
+
+
+def diff_std_1d(values):
+    """Standard deviation of adjacent differences for one raw window."""
+    count = int(len(values))
+    diff_count = count - 1
+    if diff_count <= 0:
+        return 0.0
+
+    total = 0.0
+    last = float(values[0])
+    for i in range(1, count):
+        current = float(values[i])
+        total += current - last
+        last = current
+    mean = total / float(diff_count)
+
+    var_total = 0.0
+    last = float(values[0])
+    for i in range(1, count):
+        current = float(values[i])
+        diff = current - last - mean
+        var_total += diff * diff
+        last = current
+    return float(np.sqrt(var_total / float(diff_count)))

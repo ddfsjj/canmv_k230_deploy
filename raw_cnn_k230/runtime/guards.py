@@ -364,6 +364,23 @@ class ZeroGuardState:
         return bool(self.active)
 
 
+def update_zero_guard_from_freq_mean(freq_mean, guard_cfg, state):
+    """在线路径只使用状态机真正依赖的频率均值，避免重复计算诊断特征。"""
+    if not bool(guard_cfg.get("enabled", False)):
+        return False, 0, {}
+    runtime_cfg = read_zero_guard_runtime_config(guard_cfg)
+    freq_mean = float(freq_mean)
+    state.update(freq_mean)
+    features = {
+        "freq_mean": freq_mean,
+        "zero_identity": freq_mean <= float(runtime_cfg["freq_enter_threshold"]),
+        "zero_guard_state": bool(state.active),
+        "enter_count": int(state.enter_count),
+        "exit_count": int(state.exit_count),
+    }
+    return bool(state.active), int(state.enter_count), features
+
+
 def compute_zero_guard_stateful_mask(raw_sequences, scaled_sequences=None, config=None):
     guard_cfg = config or {}
     runtime_cfg = read_zero_guard_runtime_config(guard_cfg)
@@ -547,7 +564,7 @@ def create_runtime_postprocessor(cfg, channel_count=1):
     return RuntimePostprocessor(pp_cfg, channel_count=channel_count)
 
 
-class FullGasAlarmState:
+class _LegacyFullGasAlarmState:
     """通用满气报警状态机。"""
 
     def __init__(self, cfg):
@@ -746,7 +763,419 @@ class FullGasAlarmState:
         )
 
 
-def update_full_gas_alarm_state(alarm_state, model_values, freq_mean, zero_guard_hit=False):
+class FullGasAlarmState:
+    """Per-output high-dryness alarm state machine."""
+
+    STATE_NORMAL = "NORMAL"
+    STATE_OBSERVE = "OBSERVE"
+    STATE_ALARM = "ALARM"
+
+    def __init__(self, cfg, channel_count=1, output_names=None):
+        if not isinstance(cfg, dict):
+            cfg = {}
+        self.enabled = bool(cfg.get("enabled", False))
+        self.alarm_code = int(cfg.get("alarm_code", protocol.FULL_GAS_ALARM_CODE)) & 0xFF
+
+        self.observe_prediction_count = clamp_count(cfg.get("observe_prediction_count", 6), 6, 1, 64)
+        self.observe_prediction_hit = clamp_count(cfg.get("observe_prediction_hit", 4), 4, 1, self.observe_prediction_count)
+        self.observe_prediction_min = float(cfg.get("observe_prediction_min", 0.62))
+        self.observe_prediction_median = float(cfg.get("observe_prediction_median", 0.63))
+        self.observe_frequency_count = clamp_count(cfg.get("observe_frequency_count", 6), 6, 1, 64)
+        self.observe_frequency_hit = clamp_count(cfg.get("observe_frequency_hit", 4), 4, 1, self.observe_frequency_count)
+        self.observe_frequency_threshold = float(cfg.get("observe_frequency_threshold", 529000.0))
+
+        self.alarm_prediction_count = clamp_count(cfg.get("alarm_prediction_count", 3), 3, 1, 64)
+        self.alarm_prediction_median = float(cfg.get("alarm_prediction_median", 0.67))
+        self.alarm_frequency_count = clamp_count(cfg.get("alarm_frequency_count", 6), 6, 2, 64)
+        self.alarm_frequency_hit = clamp_count(cfg.get("alarm_frequency_hit", 4), 4, 1, self.alarm_frequency_count)
+        self.alarm_frequency_threshold = float(cfg.get("alarm_frequency_threshold", 529000.0))
+        self.alarm_frequency_rise = float(cfg.get("alarm_frequency_rise", 30.0))
+
+        self.hard_alarm_frequency_count = clamp_count(cfg.get("hard_alarm_frequency_count", 10), 10, 1, 64)
+        self.hard_alarm_frequency_threshold = float(cfg.get("hard_alarm_frequency_threshold", 529200.0))
+        self.hard_alarm_diff_count = clamp_count(cfg.get("hard_alarm_diff_count", 10), 10, 1, 64)
+        self.hard_alarm_diff_hit = clamp_count(cfg.get("hard_alarm_diff_hit", 7), 7, 1, self.hard_alarm_diff_count)
+        self.hard_alarm_diff_max = float(cfg.get("hard_alarm_diff_max", 58.0))
+
+        self.clear_frequency_count = clamp_count(cfg.get("clear_frequency_count", 15), 15, 1, 64)
+        self.clear_frequency_threshold = float(cfg.get("clear_frequency_threshold", 529000.0))
+        self.clear_diff_count = clamp_count(cfg.get("clear_diff_count", 15), 15, 1, 64)
+        self.clear_diff_hit = clamp_count(cfg.get("clear_diff_hit", 12), 12, 1, self.clear_diff_count)
+        self.clear_diff_min = float(cfg.get("clear_diff_min", 60.0))
+        self.clear_confirm_count = clamp_count(cfg.get("clear_confirm_count", 3), 3, 1, 64)
+
+        self.clear_prediction_count = clamp_count(cfg.get("clear_prediction_count", 6), 6, 1, 64)
+        self.clear_prediction_hit = clamp_count(cfg.get("clear_prediction_hit", 5), 5, 1, self.clear_prediction_count)
+        self.clear_prediction_max = float(cfg.get("clear_prediction_max", 0.67))
+        self.clear_prediction_frequency_count = clamp_count(cfg.get("clear_prediction_frequency_count", 10), 10, 1, 64)
+        self.clear_prediction_frequency_threshold = float(cfg.get("clear_prediction_frequency_threshold", 529050.0))
+        self.clear_prediction_diff_count = clamp_count(cfg.get("clear_prediction_diff_count", 10), 10, 1, 64)
+        self.clear_prediction_diff_hit = clamp_count(
+            cfg.get("clear_prediction_diff_hit", 7),
+            7,
+            1,
+            self.clear_prediction_diff_count,
+        )
+        self.clear_prediction_diff_min = float(cfg.get("clear_prediction_diff_min", 58.0))
+
+        self.normal_frequency_count = clamp_count(cfg.get("normal_frequency_count", 15), 15, 1, 64)
+        self.normal_frequency_threshold = float(cfg.get("normal_frequency_threshold", 528900.0))
+        self.normal_diff_count = clamp_count(cfg.get("normal_diff_count", 15), 15, 1, 64)
+        self.normal_diff_hit = clamp_count(cfg.get("normal_diff_hit", 12), 12, 1, self.normal_diff_count)
+        self.normal_diff_min = float(cfg.get("normal_diff_min", 60.0))
+        self.normal_confirm_count = clamp_count(cfg.get("normal_confirm_count", 3), 3, 1, 64)
+
+        self.history_size = max(
+            self.observe_prediction_count,
+            self.observe_frequency_count,
+            self.alarm_prediction_count,
+            self.alarm_frequency_count,
+            self.hard_alarm_frequency_count,
+            self.hard_alarm_diff_count,
+            self.clear_frequency_count,
+            self.clear_diff_count,
+            self.clear_prediction_count,
+            self.clear_prediction_frequency_count,
+            self.clear_prediction_diff_count,
+            self.normal_frequency_count,
+            self.normal_diff_count,
+        )
+
+        self.channel_count = int(channel_count)
+        if self.channel_count <= 0:
+            self.channel_count = 1
+        self.output_index_by_name = {}
+        if output_names is not None:
+            for i, name in enumerate(output_names):
+                self.output_index_by_name[str(name)] = int(i)
+
+        self.pred_history = [[] for _ in range(self.channel_count)]
+        self.freq_history = [[] for _ in range(self.channel_count)]
+        self.diff_history = [[] for _ in range(self.channel_count)]
+        self.states = [self.STATE_NORMAL] * self.channel_count
+        self.clear_hits = [0] * self.channel_count
+        self.clear_prediction_hits = [0] * self.channel_count
+        self.normal_hits = [0] * self.channel_count
+        self.last_reason_by_channel = ["disabled" if not self.enabled else "warming"] * self.channel_count
+        self.alarm_on = False
+        self.last_reason = "disabled" if not self.enabled else "warming"
+
+    def _append_history(self, history, value):
+        history.append(float(value))
+        while len(history) > self.history_size:
+            del history[0]
+
+    def _is_valid_prediction(self, value):
+        try:
+            if not protocol.is_finite_number(value):
+                return False
+        except Exception:
+            return False
+        value = float(value)
+        return value >= 0.0 and value <= 1.0
+
+    def _recent(self, history, count):
+        count = int(count)
+        if count <= 0 or len(history) < count:
+            return None
+        return history[len(history) - count :]
+
+    def _median_recent(self, history, count):
+        values = self._recent(history, count)
+        if values is None:
+            return None
+        return median_list(values)
+
+    def _count_recent_ge(self, history, count, threshold):
+        values = self._recent(history, count)
+        if values is None:
+            return 0
+        hits = 0
+        for value in values:
+            if float(value) >= float(threshold):
+                hits += 1
+        return hits
+
+    def _count_recent_gt(self, history, count, threshold):
+        values = self._recent(history, count)
+        if values is None:
+            return 0
+        hits = 0
+        for value in values:
+            if float(value) > float(threshold):
+                hits += 1
+        return hits
+
+    def _count_recent_le(self, history, count, threshold):
+        values = self._recent(history, count)
+        if values is None:
+            return 0
+        hits = 0
+        for value in values:
+            if float(value) <= float(threshold):
+                hits += 1
+        return hits
+
+    def _all_recent_lt(self, history, count, threshold):
+        values = self._recent(history, count)
+        if values is None:
+            return False
+        for value in values:
+            if not (float(value) < float(threshold)):
+                return False
+        return True
+
+    def _all_recent_ge(self, history, count, threshold):
+        values = self._recent(history, count)
+        if values is None:
+            return False
+        for value in values:
+            if not (float(value) >= float(threshold)):
+                return False
+        return True
+
+    def _freq_rise_ok(self, history):
+        values = self._recent(history, self.alarm_frequency_count)
+        if values is None:
+            return False
+        split = int(len(values) // 2)
+        if split <= 0:
+            return False
+        before = median_list(values[:split])
+        after = median_list(values[len(values) - split :])
+        return (after - before) >= self.alarm_frequency_rise
+
+    def _observe_condition(self, idx):
+        pred_median = self._median_recent(self.pred_history[idx], self.observe_prediction_count)
+        pred_condition = (
+            pred_median is not None
+            and self._count_recent_ge(self.pred_history[idx], self.observe_prediction_count, self.observe_prediction_min)
+            >= self.observe_prediction_hit
+            and pred_median >= self.observe_prediction_median
+        )
+        freq_condition = (
+            self._count_recent_ge(self.freq_history[idx], self.observe_frequency_count, self.observe_frequency_threshold)
+            >= self.observe_frequency_hit
+        )
+        return pred_condition or freq_condition
+
+    def _fused_alarm_condition(self, idx):
+        pred_median = self._median_recent(self.pred_history[idx], self.alarm_prediction_count)
+        if pred_median is None or pred_median < self.alarm_prediction_median:
+            return False
+        return (
+            self._count_recent_ge(self.freq_history[idx], self.alarm_frequency_count, self.alarm_frequency_threshold)
+            >= self.alarm_frequency_hit
+            and self._freq_rise_ok(self.freq_history[idx])
+        )
+
+    def _hard_alarm_condition(self, idx):
+        return (
+            self._all_recent_ge(
+                self.freq_history[idx],
+                self.hard_alarm_frequency_count,
+                self.hard_alarm_frequency_threshold,
+            )
+            and self._count_recent_le(self.diff_history[idx], self.hard_alarm_diff_count, self.hard_alarm_diff_max)
+            >= self.hard_alarm_diff_hit
+        )
+
+    def _clear_frequency_condition(self, idx):
+        return (
+            self._all_recent_lt(self.freq_history[idx], self.clear_frequency_count, self.clear_frequency_threshold)
+            and self._count_recent_gt(self.diff_history[idx], self.clear_diff_count, self.clear_diff_min)
+            >= self.clear_diff_hit
+        )
+
+    def _clear_prediction_condition(self, idx):
+        values = self._recent(self.pred_history[idx], self.clear_prediction_count)
+        if values is None:
+            return False
+        pred_hits = 0
+        for value in values:
+            value = float(value)
+            # A value below the former lower bound is stronger recovery evidence,
+            # not a reason to keep a high-dryness alarm latched.
+            if value <= self.clear_prediction_max:
+                pred_hits += 1
+        return (
+            pred_hits >= self.clear_prediction_hit
+            and self._all_recent_lt(
+                self.freq_history[idx],
+                self.clear_prediction_frequency_count,
+                self.clear_prediction_frequency_threshold,
+            )
+            and self._count_recent_gt(
+                self.diff_history[idx],
+                self.clear_prediction_diff_count,
+                self.clear_prediction_diff_min,
+            )
+            >= self.clear_prediction_diff_hit
+        )
+
+    def _normal_condition(self, idx):
+        return (
+            self._all_recent_lt(self.freq_history[idx], self.normal_frequency_count, self.normal_frequency_threshold)
+            and self._count_recent_gt(self.diff_history[idx], self.normal_diff_count, self.normal_diff_min)
+            >= self.normal_diff_hit
+        )
+
+    def _update_one(self, idx, prediction, frequency_mean, diff_std):
+        if self._is_valid_prediction(prediction):
+            self._append_history(self.pred_history[idx], prediction)
+        self._append_history(self.freq_history[idx], frequency_mean)
+        self._append_history(self.diff_history[idx], diff_std)
+
+        state = self.states[idx]
+        reason = "normal"
+        if state == self.STATE_NORMAL:
+            self.clear_hits[idx] = 0
+            self.clear_prediction_hits[idx] = 0
+            self.normal_hits[idx] = 0
+            if self._observe_condition(idx):
+                self.states[idx] = self.STATE_OBSERVE
+                reason = "enter_observe"
+        elif state == self.STATE_OBSERVE:
+            self.clear_hits[idx] = 0
+            self.clear_prediction_hits[idx] = 0
+            if self._fused_alarm_condition(idx):
+                self.states[idx] = self.STATE_ALARM
+                self.normal_hits[idx] = 0
+                reason = "fused"
+            elif self._hard_alarm_condition(idx):
+                self.states[idx] = self.STATE_ALARM
+                self.normal_hits[idx] = 0
+                reason = "hard_frequency"
+            elif self._normal_condition(idx):
+                self.normal_hits[idx] += 1
+                reason = "observe_clear_count"
+                if self.normal_hits[idx] >= self.normal_confirm_count:
+                    self.states[idx] = self.STATE_NORMAL
+                    self.normal_hits[idx] = 0
+                    reason = "observe_clear"
+            else:
+                self.normal_hits[idx] = 0
+                reason = "observe"
+        else:
+            self.normal_hits[idx] = 0
+            if self._clear_frequency_condition(idx):
+                self.clear_hits[idx] += 1
+            else:
+                self.clear_hits[idx] = 0
+            if self._clear_prediction_condition(idx):
+                self.clear_prediction_hits[idx] += 1
+            else:
+                self.clear_prediction_hits[idx] = 0
+            reason = "alarm_hold"
+            if self.clear_hits[idx] >= self.clear_confirm_count or self.clear_prediction_hits[idx] >= self.clear_confirm_count:
+                self.states[idx] = self.STATE_OBSERVE
+                self.clear_hits[idx] = 0
+                self.clear_prediction_hits[idx] = 0
+                reason = "alarm_clear"
+
+        self.last_reason_by_channel[idx] = reason
+        return self.states[idx] == self.STATE_ALARM
+
+    def _reset_one_for_zero_guard(self, idx):
+        """Clear only one output's alarm state after its zero guard is confirmed."""
+        self.pred_history[idx] = []
+        self.freq_history[idx] = []
+        self.diff_history[idx] = []
+        self.states[idx] = self.STATE_NORMAL
+        self.clear_hits[idx] = 0
+        self.clear_prediction_hits[idx] = 0
+        self.normal_hits[idx] = 0
+        self.last_reason_by_channel[idx] = "zero_guard_clear"
+
+    def update(
+        self,
+        model_values,
+        frequency_means,
+        diff_stds,
+        zero_guard_hit=False,
+        zero_guard_hits=None,
+    ):
+        if not self.enabled:
+            return None
+        if not isinstance(frequency_means, (list, tuple)):
+            frequency_means = [frequency_means] * len(model_values)
+        if not isinstance(diff_stds, (list, tuple)):
+            diff_stds = [diff_stds] * len(model_values)
+        raw_zero_guard_hits = zero_guard_hits if zero_guard_hits is not None else zero_guard_hit
+        if isinstance(raw_zero_guard_hits, (list, tuple)):
+            channel_zero_guard_hits = raw_zero_guard_hits
+        else:
+            # Keep compatibility with the former scalar API. The online path now
+            # always supplies one flag per model/input binding.
+            channel_zero_guard_hits = [bool(raw_zero_guard_hits)] * len(model_values)
+        limit = min(self.channel_count, len(model_values))
+        for idx in range(limit):
+            if idx < len(channel_zero_guard_hits) and bool(channel_zero_guard_hits[idx]):
+                self._reset_one_for_zero_guard(idx)
+                continue
+            freq = frequency_means[idx] if idx < len(frequency_means) else 0.0
+            diff_std = diff_stds[idx] if idx < len(diff_stds) else 0.0
+            self._update_one(idx, model_values[idx], freq, diff_std)
+        self.alarm_on = self.any_alarm()
+        self.last_reason = self._combined_reason()
+        return self.alarm_on
+
+    def _combined_reason(self):
+        for i in range(self.channel_count):
+            if self.states[i] == self.STATE_ALARM:
+                return "{}:{}".format(i, self.last_reason_by_channel[i])
+        if self.channel_count > 0:
+            return self.last_reason_by_channel[0]
+        return "disabled" if not self.enabled else "normal"
+
+    def any_alarm(self):
+        for state in self.states:
+            if state == self.STATE_ALARM:
+                return True
+        return False
+
+    def is_alarm_index(self, idx):
+        idx = int(idx)
+        if idx < 0 or idx >= self.channel_count:
+            return False
+        return self.states[idx] == self.STATE_ALARM
+
+    def is_alarm_output(self, output_name):
+        text = str(output_name)
+        if text not in self.output_index_by_name:
+            return False
+        return self.is_alarm_index(self.output_index_by_name[text])
+
+    def summary(self):
+        if not self.enabled:
+            return "disabled"
+        return (
+            "enabled=True, code=0x{:02X}, channels={}, observe_prediction_median={}, "
+            "alarm_prediction_median={}, hard_alarm_frequency={}, any_alarm={}"
+        ).format(
+            self.alarm_code,
+            self.channel_count,
+            self.observe_prediction_median,
+            self.alarm_prediction_median,
+            self.hard_alarm_frequency_threshold,
+            self.any_alarm(),
+        )
+
+
+def update_full_gas_alarm_state(
+    alarm_state,
+    model_values,
+    frequency_means,
+    diff_stds,
+    zero_guard_hit=False,
+    zero_guard_hits=None,
+):
     if alarm_state is None or not alarm_state.enabled:
         return None
-    return alarm_state.update(model_values, freq_mean, zero_guard_hit=zero_guard_hit)
+    return alarm_state.update(
+        model_values,
+        frequency_means,
+        diff_stds,
+        zero_guard_hit=zero_guard_hit,
+        zero_guard_hits=zero_guard_hits,
+    )

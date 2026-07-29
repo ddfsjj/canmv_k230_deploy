@@ -6,6 +6,7 @@
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -14,7 +15,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 K230_DIR = ROOT / "raw_cnn_k230"
-DEPLOY_ROOT = ROOT / "deploy_pkg" / "raw_cnn_k230"
 if str(K230_DIR) not in sys.path:
     sys.path.insert(0, str(K230_DIR))
 
@@ -30,8 +30,12 @@ def parse_args():
     )
     parser.add_argument(
         "--output",
-        default="deploy_pkg/raw_cnn_k230",
-        help="Output package directory, relative to repo root by default.",
+        default=None,
+        help=(
+            "Output app directory, relative to repo root by default. "
+            "When omitted, a new unique deploy_pkg/<profile>_<timestamp>/raw_cnn_k230 "
+            "directory is created."
+        ),
     )
     parser.add_argument(
         "--clean",
@@ -46,6 +50,41 @@ def resolve_repo_path(raw_path):
     if path.is_absolute():
         return path
     return ROOT / path
+
+
+def slugify(value, fallback="runtime"):
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9._-]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("._-")
+    return text or fallback
+
+
+def make_unique_output_dir(config_path, legacy_cfg):
+    profile = legacy_cfg.get("name", "") or config_path.stem
+    base_name = slugify(profile, config_path.stem)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    package_root = ROOT / "deploy_pkg" / "{}_{}".format(base_name, timestamp)
+    suffix = 1
+    candidate = package_root
+    while candidate.exists():
+        suffix += 1
+        candidate = ROOT / "deploy_pkg" / "{}_{}_{}".format(base_name, timestamp, suffix)
+    return candidate / "raw_cnn_k230"
+
+
+def ensure_output_does_not_exist(output_dir, sdcard_root):
+    conflicts = []
+    if output_dir.exists():
+        conflicts.append(output_dir)
+    for rel in ("boot.py", "main.py"):
+        path = sdcard_root / rel
+        if path.exists():
+            conflicts.append(path)
+    if conflicts:
+        rendered = ", ".join(str(path) for path in conflicts)
+        raise RuntimeError(
+            "output already exists: {}. Choose a new --output path or pass --clean.".format(rendered)
+        )
 
 
 def copy_file(src, dst):
@@ -146,9 +185,36 @@ while True:
 '''
 
 
-def collect_model_assets(legacy_cfg):
+def resolve_asset_source(rel, source):
+    source_path = Path(source) if source else None
+    if source_path is not None:
+        if not source_path.is_absolute():
+            source_path = ROOT / source_path
+        if source_path.exists():
+            return source_path
+    return K230_DIR / rel
+
+
+def collect_model_assets(cfg, legacy_cfg):
     assets = []
     seen = set()
+    runtime_models = cfg.get("models", []) if isinstance(cfg, dict) else []
+    if runtime_models:
+        for model in runtime_models:
+            assets_cfg = model.get("assets", {}) if isinstance(model, dict) else {}
+            for key in ("kmodel", "scaler_json"):
+                rel = assets_cfg.get(key)
+                if not rel:
+                    raise RuntimeError(f"model {model.get('name', '')} missing assets.{key}")
+                norm = str(rel).replace("\\", "/")
+                src = resolve_asset_source(norm, assets_cfg.get(f"{key}_source"))
+                if not src.exists():
+                    raise FileNotFoundError(f"missing {key}: {src}")
+                if norm not in seen:
+                    seen.add(norm)
+                    assets.append((key, norm, src))
+        return assets
+
     for model in legacy_cfg.get("models", []):
         paths = model.get("paths", {})
         for key in ("kmodel", "scaler_json"):
@@ -186,13 +252,18 @@ def clean_deploy_output(output_dir, sdcard_root):
 def main():
     args = parse_args()
     config_path = resolve_repo_path(args.config)
-    output_dir = resolve_repo_path(args.output)
-    sdcard_root = output_dir.parent
     cfg = load_runtime_config(str(config_path))
     legacy_cfg = to_legacy_multi_config(cfg)
+    if args.output:
+        output_dir = resolve_repo_path(args.output)
+    else:
+        output_dir = make_unique_output_dir(config_path, legacy_cfg)
+    sdcard_root = output_dir.parent
 
     if args.clean:
         clean_deploy_output(output_dir, sdcard_root)
+    else:
+        ensure_output_does_not_exist(output_dir, sdcard_root)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     root_files = []
@@ -219,7 +290,7 @@ def main():
     copied.append("configs/runtime.json")
     config_record = file_record("raw_cnn_k230/configs/runtime.json", config_dst)
 
-    model_assets = collect_model_assets(legacy_cfg)
+    model_assets = collect_model_assets(cfg, legacy_cfg)
     manifest_assets = []
     for key, rel, src in model_assets:
         dst = output_dir / rel

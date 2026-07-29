@@ -76,6 +76,14 @@ class ZeroGuardStatefulTest(unittest.TestCase):
         self.assertEqual(mask, [False, False, True])
         self.assertIn("freq_mean", features)
 
+    def test_fast_online_check_preserves_state_transitions(self):
+        state = guards.ZeroGuardState(self.cfg)
+        results = [
+            guards.update_zero_guard_from_freq_mean(value, self.cfg, state)[0]
+            for value in [479000.0, 478000.0, 477000.0, 501000.0, 502000.0, 503000.0]
+        ]
+        self.assertEqual(results, [False, False, True, True, True, False])
+
 
 if __name__ == "__main__":
     unittest.main()

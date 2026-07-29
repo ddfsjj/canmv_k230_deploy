@@ -1,27 +1,42 @@
 .venv/
 
-# Python 缓存
+# Python cache
 __pycache__/
 *.py[cod]
 
-# 推理输出与临时文件
-predictions*.csv
-I
+# Local logs and process markers
+*.log
+*.pid
+*.port
+.k230_deploy_gui.pid
+.k230_deploy_gui.port
+k230_deploy_gui.log
+
+# Temporary files
 *.tmp
 *.bak
+~$*
 
-# 本地评估、对比和调试产物
+# Inference outputs and local generated artifacts
+predictions*.csv
 artifacts/
 deploy_pkg/
+quant_outputs/
+generated_uart_tests/*one_line_hex.txt
+generated_uart_tests/vq_actual_*
+
+# PC-side local evaluation, comparison, and debug artifacts
 raw_cnn_pc/artifacts/
 raw_cnn_pc/tmp/
 raw_cnn_pc/scheme_eval/
 raw_cnn_pc/experiments/
 raw_cnn_pc/layerwise_compare/
 raw_cnn_pc/raw_cnn_pc/
+
+# K230 local build/check outputs
 raw_cnn_k230/k230-outputs/
 raw_cnn_k230/docx_render_check/
 
-# 编译转储目录
+# Compiler conversion and dump directories
 gmodel_dump_dir/
 **/nncase_dump*/

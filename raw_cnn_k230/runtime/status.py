@@ -8,7 +8,7 @@ from runtime import config as runtime_config
 class RuntimeStatusContext:
     """中文注释：集中持有在线推理所需的状态对象和状态配置。"""
 
-    def __init__(self, cfg, runtime_cfg, channel_count, binding_count):
+    def __init__(self, cfg, runtime_cfg, channel_count, binding_count, binding_names=None):
         self.zero_guard_cfg = guards.get_zero_guard_config(cfg)
         self.zero_guard_enabled = bool(self.zero_guard_cfg.get("enabled", False))
         self.zero_guard_output_value = float(self.zero_guard_cfg.get("output_value", 0.0))
@@ -22,7 +22,11 @@ class RuntimeStatusContext:
             channel_count=int(binding_count),
         )
         alarm_cfg = runtime_config.get_runtime_section(runtime_cfg, "full_gas_alarm")
-        self.full_gas_alarm = guards.FullGasAlarmState(alarm_cfg)
+        self.full_gas_alarm = guards.FullGasAlarmState(
+            alarm_cfg,
+            channel_count=int(binding_count),
+            output_names=binding_names,
+        )
 
     def update_raw_anomaly(self, source_index, raw_window):
         """中文注释：更新某个物理输入通道的原始异常码。"""
@@ -30,14 +34,23 @@ class RuntimeStatusContext:
         self.channel_raw_error_codes[int(source_index)] = code
         return code
 
-    def update_full_gas_alarm(self, model_values, freq_mean, zero_guard_hit=False):
+    def update_full_gas_alarm(
+        self,
+        model_values,
+        frequency_means,
+        diff_stds,
+        zero_guard_hit=False,
+        zero_guard_hits=None,
+    ):
         """中文注释：按统一入口更新满液报警状态。"""
         if self.full_gas_alarm.enabled:
             guards.update_full_gas_alarm_state(
                 self.full_gas_alarm,
                 model_values,
-                freq_mean,
+                frequency_means,
+                diff_stds,
                 zero_guard_hit=zero_guard_hit,
+                zero_guard_hits=zero_guard_hits,
             )
 
     def postprocessing_summary(self):
@@ -86,6 +99,11 @@ def format_zero_guard_features(features):
 def check_zero_guard(raw_seq, scaled_seq, guard_cfg, state=None):
     """中文注释：统一 zero guard 判定入口。"""
     return guards.is_zero_guard_hit(raw_seq, scaled_seq, guard_cfg, state=state)
+
+
+def check_zero_guard_mean(freq_mean, guard_cfg, state):
+    """中文注释：板端在线快速 zero guard 判定入口。"""
+    return guards.update_zero_guard_from_freq_mean(freq_mean, guard_cfg, state)
 
 
 def build_raw_anomaly_state(cfg, channel_count):

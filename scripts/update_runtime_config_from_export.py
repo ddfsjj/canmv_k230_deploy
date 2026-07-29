@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from copy import deepcopy
 from pathlib import Path
 
@@ -18,9 +19,37 @@ def load_json(path: Path) -> dict:
         return json.load(f)
 
 
+def format_runtime_config_json(payload: dict) -> str:
+    """Format runtime JSON for hand editing.
+
+    Keep channel lists and small protocol arrays on one line, while leaving
+    output.slots expanded so slot mappings remain easy to scan.
+    """
+    text = json.dumps(payload, indent=2, ensure_ascii=False)
+    compact_array_keys = (
+        "input_channels",
+        "header",
+        "tail",
+        "outer_header",
+        "outer_tail",
+    )
+    for key in compact_array_keys:
+        pattern = re.compile(
+            r'^(\s*"' + re.escape(key) + r'": )\[\n((?:\s*-?\d+(?:\.\d+)?,?\n)+)(\s*)\]',
+            re.MULTILINE,
+        )
+
+        def replace(match):
+            values = re.findall(r"-?\d+(?:\.\d+)?", match.group(2))
+            return "{}[{}]".format(match.group(1), ", ".join(values))
+
+        text = pattern.sub(replace, text)
+    return text + "\n"
+
+
 def save_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    path.write_text(format_runtime_config_json(payload), encoding="utf-8")
 
 
 def resolve_repo_path(raw_path: str | Path) -> Path:
@@ -198,7 +227,7 @@ def main() -> int:
 
     updated = update_runtime_config(load_json(runtime_path), load_json(export_path), args)
     if args.dry_run:
-        print(json.dumps(updated, indent=2, ensure_ascii=False))
+        print(format_runtime_config_json(updated), end="")
         return 0
 
     save_json(output_path, updated)

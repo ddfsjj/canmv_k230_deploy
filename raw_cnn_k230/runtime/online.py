@@ -51,6 +51,7 @@ def run_uart_online(cfg, root, uart_sender):
         runtime_cfg=runtime_cfg,
         channel_count=channel_count,
         binding_count=len(model_bindings),
+        binding_names=[binding.output_name for binding in model_bindings],
     )
     zero_guard_cfg = status_ctx.zero_guard_cfg
     zero_guard_enabled = status_ctx.zero_guard_enabled
@@ -229,28 +230,21 @@ def run_uart_online(cfg, root, uart_sender):
             infer_round += 1
             model_values = []
             model_pred_map = {}
+            alarm_frequency_means = []
+            alarm_diff_stds = []
+            alarm_zero_guard_hits = []
             infer_costs_ms = []
-            zero_guard_hit = False
             zero_guard_votes = 0
             zero_guard_features = {}
             for binding_idx, binding in enumerate(model_bindings):
                 binding_zero_guard_hit = False
                 if zero_guard_enabled and window_bank.zero_seq_filled >= max_seq_length:
                     input_idx = input_index_by_name[binding.input_ctx["name"]]
-                    tmp_zero_seq = window_bank.expand_zero_guard_sequence(input_idx)
-                    guard_scaled_seq = None
-                    if binding.model_ctx.sequence_length > 1:
-                        numeric.expand_sequence_ring(
-                            binding.seq_ring,
-                            binding.seq_write_idx,
-                            tmp_seq_map[binding.output_name],
-                        )
-                        guard_scaled_seq = tmp_seq_map[binding.output_name]
-                    binding_zero_guard_hit, zero_guard_votes, zero_guard_features = runtime_status.check_zero_guard(
-                        tmp_zero_seq,
-                        guard_scaled_seq,
+                    guard_freq_mean = window_bank.get_zero_guard_freq_mean(input_idx)
+                    binding_zero_guard_hit, zero_guard_votes, zero_guard_features = runtime_status.check_zero_guard_mean(
+                        guard_freq_mean,
                         zero_guard_cfg,
-                        state=zero_guard_state_map[binding.output_name],
+                        zero_guard_state_map[binding.output_name],
                     )
                 if binding_zero_guard_hit:
                     pred = postprocessor.update(
@@ -261,7 +255,6 @@ def run_uart_online(cfg, root, uart_sender):
                     binding.last_pred = pred
                     binding.model_ctx.last_pred = pred
                     infer_us = 0
-                    zero_guard_hit = True
                     if debug_predict_trace:
                         online_print(
                             "uart_online_zero_guard_hit: infer_round={}, output={}, votes={}, features={}".format(
@@ -282,12 +275,16 @@ def run_uart_online(cfg, root, uart_sender):
                     binding.model_ctx.last_pred = pred
                 model_values.append(pred)
                 model_pred_map[binding.output_name] = pred
+                alarm_frequency_means.append(window_bank.get_last_freq_mean(binding.input_ctx["name"]))
+                alarm_diff_stds.append(window_bank.get_last_diff_std(binding.input_ctx["name"]))
+                alarm_zero_guard_hits.append(bool(binding_zero_guard_hit))
                 infer_costs_ms.append(infer_us / 1000.0)
 
             status_ctx.update_full_gas_alarm(
                 model_values,
-                freq_mean,
-                zero_guard_hit=zero_guard_hit,
+                alarm_frequency_means,
+                alarm_diff_stds,
+                zero_guard_hits=alarm_zero_guard_hits,
             )
 
             tx_values, tx_error_codes = runtime_output.send_uart_prediction_frame(

@@ -1,0 +1,14 @@
+*.sh text eol=lf
+*.py text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.docx binary
+*.kmodel binary
+*.onnx binary
+*.pth binary
+*.pkl binary
